@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+*.vsix
+.vscode-test/
+.test-build/
+
+# Fixture projects install their own deps and build output when the
+# acceptance-test scripts run; keep the fixtures themselves tracked, not their
+# node_modules/build output.
+fixtures/**/node_modules/
+fixtures/**/dist/

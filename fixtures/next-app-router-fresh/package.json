@@ -1,0 +1,21 @@
+{
+  "name": "next-app-router-fresh-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@x402/core": "^2.14.0",
+    "@x402/next": "^2.14.0",
+    "@x402/stellar": "^2.14.0",
+    "next": "^16.2.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.5.0"
+  }
+}

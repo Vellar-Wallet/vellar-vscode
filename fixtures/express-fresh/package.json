@@ -1,0 +1,20 @@
+{
+  "name": "express-fresh-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@x402/core": "^2.14.0",
+    "@x402/express": "^2.14.0",
+    "@x402/stellar": "^2.14.0",
+    "express": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  }
+}
