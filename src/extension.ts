@@ -2,9 +2,11 @@ import * as vscode from "vscode";
 import { detectExpressFastifyRoutes } from "./detectors/expressFastify";
 import { detectNextAppRouterRoutes, detectNextPagesRouterRoutes } from "./detectors/nextjs";
 import { hasExistingGate } from "./gateMarker";
-import { computeEdits, type TextEdit } from "./injector";
+import { computeEdits, findDescriptionSelection, type TextEdit } from "./injector";
 import { PAGES_ROUTER_GUIDANCE } from "./generators/nextPagesRouter";
+import { detectPackageManager, findNearestPackageDir, renderInstallCommand } from "./packageManager";
 import { DEFAULT_PRICE_USDC, validatePriceInput } from "./priceValidation";
+import { requiredPackagesFor } from "./requiredPackages";
 import { resolveServiceName } from "./serviceName";
 import type { DetectedRoute, PaymentConfig } from "./types";
 
@@ -73,10 +75,41 @@ async function addPaymentCommand(): Promise<void> {
   };
 
   await applyRouteInjection(editor, picked, config);
-  vscode.window.showInformationMessage(
-    `Vellar x402: added a $${priceUsdc} USDC payment gate to ${picked.method} ${picked.routePath}. ` +
-      "Run npm install @x402/stellar @x402/core (plus the framework package) and review the TODOs.",
+  await offerDependencyInstall(editor, picked, workspaceRoot, priceUsdc);
+}
+
+/**
+ * Shows the success message with an "Install dependencies" button. Clicking it
+ * opens a new integrated terminal in the nearest package directory (important in
+ * a monorepo — the packages must land in THAT package's package.json, not the
+ * repo root's) and immediately runs the install command for whichever package
+ * manager (pnpm/yarn/npm) the project actually uses, detected from its lockfile.
+ */
+async function offerDependencyInstall(
+  editor: vscode.TextEditor,
+  route: DetectedRoute,
+  workspaceRoot: string | undefined,
+  priceUsdc: string,
+): Promise<void> {
+  if (route.framework === "next-pages-router") return; // never reaches here; guarded earlier
+
+  const filePath = editor.document.uri.fsPath;
+  const manager = detectPackageManager(filePath, workspaceRoot);
+  const packageDir = findNearestPackageDir(filePath, workspaceRoot);
+  const packages = requiredPackagesFor(route.framework);
+  const installCommand = renderInstallCommand(manager, packages);
+
+  const choice = await vscode.window.showInformationMessage(
+    `Vellar x402: added a $${priceUsdc} USDC payment gate to ${route.method} ${route.routePath}. ` +
+      `Review the TODOs, then install: ${installCommand}`,
+    "Install dependencies",
   );
+
+  if (choice === "Install dependencies") {
+    const terminal = vscode.window.createTerminal({ name: "Vellar x402: install", cwd: packageDir });
+    terminal.show();
+    terminal.sendText(installCommand, true); // true = run immediately, like pressing Enter
+  }
 }
 
 function detectRoutes(document: vscode.TextDocument): DetectedRoute[] {
@@ -156,6 +189,30 @@ async function applyRouteInjection(
       applyVscodeEdit(editBuilder, edit);
     }
   });
+
+  selectGeneratedDescription(editor);
+}
+
+/**
+ * Moves the cursor to the generated `description: "...", // TODO: add the
+ * actual resource description` value and selects the quoted string so the
+ * developer can start typing a real description immediately, without hunting
+ * for the line themselves.
+ *
+ * Runs after `editor.edit()` has resolved (reads the settled document, not the
+ * pre-edit snapshot). Nice-to-have only: the injection already succeeded by this
+ * point, so if the marker line can't be found — a generator produced a different
+ * shape than expected — this does nothing rather than throwing or surfacing an
+ * error over a cursor-placement detail.
+ */
+function selectGeneratedDescription(editor: vscode.TextEditor): void {
+  const selection = findDescriptionSelection(editor.document.getText());
+  if (!selection) return;
+
+  const start = new vscode.Position(selection.line, selection.startCharacter);
+  const end = new vscode.Position(selection.line, selection.endCharacter);
+  editor.selection = new vscode.Selection(start, end);
+  editor.revealRange(new vscode.Range(start, end), vscode.TextEditorRevealType.InCenter);
 }
 
 function applyVscodeEdit(editBuilder: vscode.TextEditorEdit, edit: TextEdit): void {

@@ -1,5 +1,7 @@
 # Vellar x402
 
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/VellarWallet.vellar-x402?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=VellarWallet.vellar-x402)
+
 Add an x402 payment gate to an HTTP endpoint from inside VS Code, in one command.
 
 Vellar x402 scans the file you have open for route definitions (Express, Fastify,
@@ -12,6 +14,8 @@ working boilerplate that:
 - Reads your payout address from a VS Code setting, never hardcodes a placeholder
 - Leaves your existing route logic untouched — the payment gate is added around
   the handler, not inside it
+
+<img width="605" height="362" alt="Vellar x402 route picker" src="https://github.com/user-attachments/assets/112cfeec-ad90-42e0-a21d-58a59d4d5bcf" />
 
 ## What's in slice one
 
@@ -59,7 +63,11 @@ docs.
 
 ## Install
 
-This extension isn't on the Marketplace yet. Build and install it from source:
+**From the Marketplace** (recommended): search **"Vellar x402"** in VS Code's
+Extensions panel (`Cmd/Ctrl+Shift+X`) and click Install, or install directly from
+[marketplace.visualstudio.com/items?itemName=VellarWallet.vellar-x402](https://marketplace.visualstudio.com/items?itemName=VellarWallet.vellar-x402).
+
+**From source** (for development, or to try an unreleased change):
 
 ```bash
 git clone https://github.com/Vellar-Wallet/vellar-vscode.git
@@ -69,10 +77,10 @@ npm run vsce-package   # builds dist/extension.js, then packages vellar-x402-<ve
 ```
 
 Then in VS Code: **Extensions → ... menu → Install from VSIX...** and select the
-generated `.vsix` file. Or from the command line:
+generated `.vsix` file, or from the command line:
 
 ```bash
-code --install-extension vellar-x402-0.1.0.vsix
+code --install-extension vellar-x402-<version>.vsix
 ```
 
 ## Configure
@@ -101,7 +109,12 @@ generating a gate, re-run the command on that route to update the inlined addres
    (`Cmd/Ctrl+Shift+P`).
 3. Pick the route from the quick-pick list.
 4. Enter a price in USDC (default `0.01`, up to 7 decimal places).
-5. Review the injected code — install the runtime dependencies it needs:
+5. Review the injected code, then click **Install dependencies** on the success
+   notification — it detects your project's package manager (pnpm/yarn/npm, from
+   whichever lockfile it finds walking up from the file) and runs the install
+   command in a new terminal, in the correct package directory (important in a
+   monorepo — it installs into the sub-package's `package.json`, not the repo
+   root's). Or install manually:
    ```bash
    npm install @x402/stellar @x402/core @x402/express   # or @x402/fastify, @x402/next
    ```
@@ -121,10 +134,11 @@ Route detection uses regex and may miss multi-line route signatures or routes
 with non-string paths (template literals, variables). If your route isn't
 detected, open an issue.
 
-## Screenshot
+## Icon
 
-<img width="605" height="362" alt="readme" src="https://github.com/user-attachments/assets/112cfeec-ad90-42e0-a21d-58a59d4d5bcf" />
-
+`icon.png` is the Vellar wordmark, resized to 128×128 from the square logo asset
+used for the dApp's OG image (`OG-image/logo-extension.png` in the main
+`vela-wallet` repo).
 
 ## Acceptance test
 
@@ -148,9 +162,11 @@ Re-run any of these yourself:
 
 ```bash
 npm run compile
-node scripts/run-acceptance-test.js        # Express — the spec's acceptance test
-node scripts/run-fastify-check.js          # Fastify
-node scripts/run-next-app-router-check.js  # Next.js App Router
+node scripts/run-acceptance-test.js                   # Express — the spec's acceptance test
+node scripts/run-fastify-check.js                      # Fastify
+node scripts/run-next-app-router-check.js               # Next.js App Router
+node scripts/run-fastify-multiline-import-check.js       # regression: see below
+node scripts/run-package-manager-check.js                # pnpm/yarn/npm detection
 ```
 
 Each script resets its fixture's git-tracked source back to its pristine,

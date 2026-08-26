@@ -30,9 +30,14 @@ esbuild.buildSync({
   external: ["vscode"],
 });
 
-const { detectExpressFastifyRoutes, computeEdits, applyEdits, validatePriceInput, hasExistingGate } = require(
-  path.join(root, ".test-build", "testEntry.js"),
-);
+const {
+  detectExpressFastifyRoutes,
+  computeEdits,
+  applyEdits,
+  validatePriceInput,
+  hasExistingGate,
+  findDescriptionSelection,
+} = require(path.join(root, ".test-build", "testEntry.js"));
 
 function assert(condition, message) {
   if (!condition) {
@@ -98,6 +103,21 @@ try {
   assert(injectedText.includes('res.json({ forecast: "sunny", tempF: 72 });'), "original handler body is untouched");
   assert(injectedText.includes('app.post("/reports"'), "unrelated POST /reports route is untouched");
   assert(injectedText.includes('app.get("/users/:id"'), "unrelated GET /users/:id route is untouched");
+
+  console.log("\n4b. Verifying the post-injection description selection...");
+  const selection = findDescriptionSelection(injectedText);
+  assert(Boolean(selection), "findDescriptionSelection finds the generated description line");
+  const selectedLineText = injectedText.split(/\r?\n/)[selection.line];
+  assert(selectedLineText.includes("// TODO: add the actual resource description"), "the found line is actually the description placeholder line");
+  const selectedValue = selectedLineText.slice(selection.startCharacter, selection.endCharacter);
+  assert(
+    selectedValue === "express-fresh-fixture — /weather ($0.05 USDC)",
+    `selection covers exactly the description string value, got "${selectedValue}"`,
+  );
+  assert(
+    selectedLineText[selection.startCharacter - 1] === '"' && selectedLineText[selection.endCharacter] === '"',
+    "selection bounds sit exactly inside the surrounding quotes, not on them",
+  );
 
   console.log("\n5. Installing fixture dependencies (npm install)...");
   execSync("npm install --no-audit --no-fund", { cwd: fixtureDir, stdio: "inherit" });

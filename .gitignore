@@ -10,3 +10,4 @@ out/
 # node_modules/build output.
 fixtures/**/node_modules/
 fixtures/**/dist/
+.DS_Store

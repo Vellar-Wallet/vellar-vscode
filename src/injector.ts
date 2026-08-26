@@ -25,13 +25,39 @@ export interface TextEdit {
   text: string;
 }
 
-/** Inserts text after the last top-of-file import statement, or at line 0 if none. */
+/**
+ * Inserts text after the last top-of-file import statement, or at line 0 if none.
+ *
+ * A single `import` statement can span multiple lines (a multi-line named-import
+ * block: `import {\n  a,\n  b,\n} from "x";`) — this tracks brace depth across
+ * lines so it only considers an import "finished" once its braces balance back to
+ * zero, rather than treating the opening `import {` line as the whole statement
+ * and inserting into the middle of the block.
+ */
 export function findImportInsertionLine(lines: string[]): number {
   let lastImportLine = -1;
+  let inMultiLineImport = false;
+  let braceDepth = 0;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    if (inMultiLineImport) {
+      braceDepth += countChar(line, "{") - countChar(line, "}");
+      lastImportLine = i;
+      if (braceDepth <= 0) inMultiLineImport = false;
+      continue;
+    }
+
     if (/^\s*import\s/.test(line) || /^\s*const\s+\w+\s*=\s*require\(/.test(line)) {
       lastImportLine = i;
+      braceDepth = countChar(line, "{") - countChar(line, "}");
+      // A `from "..."` (or a require call's closing paren) on the same line means
+      // this single-line import is already complete, even if it happens to contain
+      // a balanced `{ }` — only keep scanning as multi-line when the statement
+      // hasn't reached its terminator yet.
+      const terminated = /from\s*["'][^"']*["']\s*;?\s*$/.test(line) || /\)\s*;?\s*$/.test(line);
+      if (!terminated && braceDepth > 0) inMultiLineImport = true;
     } else if (lastImportLine !== -1 && line.trim().length === 0) {
       continue; // allow blank lines between imports
     } else if (lastImportLine !== -1) {
@@ -39,6 +65,12 @@ export function findImportInsertionLine(lines: string[]): number {
     }
   }
   return lastImportLine + 1;
+}
+
+function countChar(line: string, ch: string): number {
+  let count = 0;
+  for (const c of line) if (c === ch) count++;
+  return count;
 }
 
 function indentBlock(block: string, indent: string): string {
@@ -238,4 +270,48 @@ export function applyEdits(originalText: string, edits: TextEdit[]): string {
   }
 
   return resultLines.join("\n");
+}
+
+/** Marker suffix on the generated `description` line — see renderDiscoveryFields. */
+const EDIT_ME_MARKER = "// TODO: add the actual resource description";
+
+/**
+ * A cursor selection expressed in plain (0-based line, character) coordinates,
+ * matching the `TextEdit` convention above — kept `vscode`-free so it's
+ * unit-testable without the extension host.
+ */
+export interface DescriptionSelection {
+  line: number;
+  startCharacter: number;
+  endCharacter: number;
+}
+
+/**
+ * Finds the generated `description: "...", // TODO: add the actual resource
+ * description` line in the
+ * POST-injection text and returns the selection range covering just the quoted
+ * string value (not the quotes themselves, not the comment) — so the developer
+ * can start typing a real description immediately.
+ *
+ * Scans the final text rather than tracking offsets through edit composition:
+ * with multiple inserts before/after the description line, its final line number
+ * depends on every other edit that ran, so re-finding it by content in the
+ * settled result is simpler and more robust than threading that math through.
+ *
+ * Returns `null` when the marker isn't found (e.g. a generator produced a
+ * different shape than expected) — the caller treats this as a no-op, never an
+ * error: the injection already succeeded, this is a cursor-placement nicety.
+ */
+export function findDescriptionSelection(injectedText: string): DescriptionSelection | null {
+  const lines = injectedText.split(/\r?\n/);
+  const lineIndex = lines.findIndex((line) => line.includes(EDIT_ME_MARKER));
+  if (lineIndex === -1) return null;
+
+  const line = lines[lineIndex];
+  const firstQuote = line.indexOf('"');
+  if (firstQuote === -1) return null;
+  const secondQuote = line.indexOf('"', firstQuote + 1);
+  if (secondQuote === -1) return null;
+
+  return { line: lineIndex, startCharacter: firstQuote + 1, endCharacter: secondQuote };
 }

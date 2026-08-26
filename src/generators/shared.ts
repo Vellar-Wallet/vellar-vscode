@@ -47,7 +47,7 @@ export function renderAccepts(config: PaymentConfig, indent: string): string {
  */
 export function renderDiscoveryFields(config: PaymentConfig, indent: string): string {
   return [
-    `${indent}description: "${config.serviceName} — ${config.endpointUrl} ($${config.priceUsdc} USDC)", // <-- edit me`,
+    `${indent}description: "${config.serviceName} — ${config.endpointUrl} ($${config.priceUsdc} USDC)", // TODO: add the actual resource description`,
     `${indent}serviceName: "${config.serviceName}",`,
     `${indent}tags: ["api", "x402"],`,
   ].join("\n");

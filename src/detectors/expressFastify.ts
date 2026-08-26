@@ -18,14 +18,48 @@ const ROUTE_OBJECT_START = /^(?<indent>[ \t]*)(?<receiver>\w+)\.route\s*\(\s*\{/
 const ROUTE_OBJECT_METHOD = /\bmethod\s*:\s*(['"`])(?<method>[A-Za-z]+)\1/;
 const ROUTE_OBJECT_URL = /\b(?:url|path)\s*:\s*(['"`])(?<path>[^'"`]*)\1/;
 
-function classify(receiver: string): Framework | null {
-  const r = receiver.toLowerCase();
-  if (r === "fastify" || r === "server") return "fastify";
-  if (r === "app" || r === "router") return "express";
-  // Unknown receiver name (e.g. a custom variable) — still usable, default to Express
-  // since app.get/router.get are the more common convention and the generated code
-  // is framework-specific only in its imports, which the user can adjust.
-  return "express";
+/**
+ * Framework identity is decided by how each variable was actually constructed, not
+ * by its name — `app`, `server`, and `router` are all common names for BOTH an
+ * Express app and a Fastify instance (this codebase's own services name their
+ * Fastify instance `app`), so guessing from the name alone misclassifies real code.
+ *
+ * `const app = Fastify(...)` / `const app = fastify(...)` -> fastify
+ * `const app = express()` -> express
+ * `const router = express.Router()` -> express
+ * `const router = Router()` (destructured/imported directly) -> express
+ */
+const FASTIFY_CONSTRUCTOR =
+  /^[ \t]*(?:export\s+)?const\s+(?<name>\w+)\s*=\s*(?:new\s+)?[Ff]astify\s*\(/;
+const EXPRESS_APP_CONSTRUCTOR = /^[ \t]*(?:export\s+)?const\s+(?<name>\w+)\s*=\s*express\s*\(\s*\)/;
+const EXPRESS_ROUTER_CONSTRUCTOR =
+  /^[ \t]*(?:export\s+)?const\s+(?<name>\w+)\s*=\s*(?:express\.)?Router\s*\(/;
+
+/** Which package(s) this file imports `Fastify`/`express` from — the fallback signal
+ * when a call-site receiver's constructor can't be traced (e.g. it's a function
+ * parameter, not a local `const`). */
+function detectFileLevelFramework(lines: string[]): Framework | null {
+  const hasFastifyImport = lines.some((l) => /from\s+["']fastify["']/.test(l));
+  const hasExpressImport = lines.some((l) => /from\s+["']express["']/.test(l));
+  if (hasFastifyImport && !hasExpressImport) return "fastify";
+  if (hasExpressImport && !hasFastifyImport) return "express";
+  return null; // both, or neither — ambiguous, caller must fall back further
+}
+
+/** Maps each variable name in this file to the framework it was actually constructed as. */
+function buildVariableFrameworkMap(lines: string[]): Map<string, Framework> {
+  const map = new Map<string, Framework>();
+  for (const line of lines) {
+    const fastifyMatch = FASTIFY_CONSTRUCTOR.exec(line);
+    if (fastifyMatch?.groups) map.set(fastifyMatch.groups.name, "fastify");
+
+    const expressAppMatch = EXPRESS_APP_CONSTRUCTOR.exec(line);
+    if (expressAppMatch?.groups) map.set(expressAppMatch.groups.name, "express");
+
+    const routerMatch = EXPRESS_ROUTER_CONSTRUCTOR.exec(line);
+    if (routerMatch?.groups) map.set(routerMatch.groups.name, "express");
+  }
+  return map;
 }
 
 /**
@@ -57,13 +91,23 @@ export function detectExpressFastifyRoutes(text: string): DetectedRoute[] {
   const lines = text.split(/\r?\n/);
   const routes: DetectedRoute[] = [];
 
+  const variableFrameworks = buildVariableFrameworkMap(lines);
+  const fileLevelFramework = detectFileLevelFramework(lines);
+
+  // Resolve a receiver name to a framework: trust its own constructor if we traced
+  // one, otherwise fall back to the file's single unambiguous import, otherwise
+  // give up on this call site entirely rather than guess from the name.
+  function resolveFramework(receiver: string): Framework | null {
+    return variableFrameworks.get(receiver) ?? fileLevelFramework;
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     const callMatch = CALL_PATTERN.exec(line);
     if (callMatch?.groups) {
       const { indent, receiver, method, path } = callMatch.groups;
-      const framework = classify(receiver);
+      const framework = resolveFramework(receiver);
       if (framework) {
         const insertion = findHandlerBodyInsertion(lines, i);
         routes.push({
@@ -84,6 +128,8 @@ export function detectExpressFastifyRoutes(text: string): DetectedRoute[] {
 
     const routeObjMatch = ROUTE_OBJECT_START.exec(line);
     if (routeObjMatch?.groups) {
+      // `.route({...})` config form is Fastify-only — no Express equivalent exists,
+      // so no framework ambiguity here regardless of the receiver's traced origin.
       // Scan the next few lines for method/url within the object literal.
       const windowEnd = Math.min(lines.length, i + 15);
       let method: string | undefined;
