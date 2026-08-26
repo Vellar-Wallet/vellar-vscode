@@ -134,12 +134,6 @@ Route detection uses regex and may miss multi-line route signatures or routes
 with non-string paths (template literals, variables). If your route isn't
 detected, open an issue.
 
-## Icon
-
-`icon.png` is the Vellar wordmark, resized to 128×128 from the square logo asset
-used for the dApp's OG image (`OG-image/logo-extension.png` in the main
-`vela-wallet` repo).
-
 ## Acceptance test
 
 Verified against fresh fixture projects with real `@x402/*` packages installed and
