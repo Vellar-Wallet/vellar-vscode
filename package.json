@@ -2,7 +2,7 @@
   "name": "vellar-x402",
   "displayName": "Vellar x402",
   "description": "Add x402 payment gating to an HTTP endpoint in one command.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "VellarWallet",
   "license": "MIT",
   "icon": "icon.png",
