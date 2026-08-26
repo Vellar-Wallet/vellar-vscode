@@ -123,9 +123,8 @@ detected, open an issue.
 
 ## Screenshot
 
-_Add a screenshot of the quick-pick + price prompt here before publishing._
+<img width="605" height="362" alt="readme" src="https://github.com/user-attachments/assets/112cfeec-ad90-42e0-a21d-58a59d4d5bcf" />
 
-`docs/screenshot-placeholder.png`
 
 ## Acceptance test
 
