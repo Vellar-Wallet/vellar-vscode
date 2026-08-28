@@ -23,24 +23,31 @@ jobs:
         with:
           node-version: 20
 
-      # Fixture node_modules are gitignored (fixtures/**/node_modules/), so
-      # they don't arrive with checkout — each script's own `npm install`
-      # inside its fixture dir does real work on a cache miss. This cache
-      # doesn't remove that install step, it makes it a fast no-op on a hit.
-      # Keyed on every lockfile (root + all four fixtures) so a change to any
-      # one of them correctly busts the cache.
-      - name: Cache node_modules
+      # Root node_modules is deliberately NOT cached here: `npm ci` (below)
+      # unconditionally deletes an existing node_modules before it installs
+      # ("removed before npm ci begins its install" — npm's own docs), so
+      # caching that path would be restored, immediately wiped, and rebuilt
+      # from the network every run regardless of hit or miss. Caching it was
+      # tried and confirmed useless before this comment was written, not
+      # assumed.
+      #
+      # Fixture node_modules are the part that actually benefits: they're
+      # gitignored (fixtures/**/node_modules/), so they don't arrive with
+      # checkout, and each script's own `npm install` inside its fixture dir
+      # (not `ci`, so it reconciles rather than wipes) turns into a fast
+      # no-op on a cache hit instead of a real network install. Keyed on
+      # every fixture lockfile so a change to any one correctly busts it.
+      - name: Cache fixture node_modules
         uses: actions/cache@v4
         with:
           path: |
-            node_modules
             fixtures/express-fresh/node_modules
             fixtures/fastify-fresh/node_modules
             fixtures/fastify-multiline-import/node_modules
             fixtures/next-app-router-fresh/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json', 'fixtures/*/package-lock.json') }}
+          key: ${{ runner.os }}-fixtures-${{ hashFiles('fixtures/*/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-fixtures-
 
       - name: Install dependencies
         run: npm ci
