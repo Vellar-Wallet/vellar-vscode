@@ -1,0 +1,67 @@
+name: CI
+
+# Runs the same five verification scripts a human runs by hand today (see
+# README's "Acceptance test" section), so a future change can't silently break
+# one of them without anyone noticing. Deliberately vscode-free — no
+# @vscode/test-electron, no extension host — the scripts exercise
+# src/detectors, src/injector, and src/generators directly, exactly the scope
+# these scripts were built for.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Fixture node_modules are gitignored (fixtures/**/node_modules/), so
+      # they don't arrive with checkout — each script's own `npm install`
+      # inside its fixture dir does real work on a cache miss. This cache
+      # doesn't remove that install step, it makes it a fast no-op on a hit.
+      # Keyed on every lockfile (root + all four fixtures) so a change to any
+      # one of them correctly busts the cache.
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            fixtures/express-fresh/node_modules
+            fixtures/fastify-fresh/node_modules
+            fixtures/fastify-multiline-import/node_modules
+            fixtures/next-app-router-fresh/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json', 'fixtures/*/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Run acceptance test (Express)
+        run: node scripts/run-acceptance-test.js
+
+      - name: Run Fastify check
+        run: node scripts/run-fastify-check.js
+
+      - name: Run Next.js App Router check
+        run: node scripts/run-next-app-router-check.js
+
+      - name: Run package manager detection checks
+        run: node scripts/run-package-manager-check.js
+
+      # Named run-fastify-multiline-import-check.js in this repo — the task
+      # named this script run-import-block-regression.js, which doesn't exist;
+      # using the real file rather than a path that would fail on first push.
+      - name: Run multi-line import regression check
+        run: node scripts/run-fastify-multiline-import-check.js

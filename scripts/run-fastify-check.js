@@ -24,7 +24,7 @@ esbuild.buildSync({
   outfile: path.join(root, ".test-build", "testEntry.js"),
   external: ["vscode"],
 });
-const { detectExpressFastifyRoutes, computeEdits, applyEdits } = require(
+const { detectExpressFastifyRoutes, computeEdits, applyEdits, findDescriptionSelection } = require(
   path.join(root, ".test-build", "testEntry.js"),
 );
 
@@ -69,6 +69,21 @@ try {
   assert(injectedText.includes('fastify.route({'), "original fastify.route({...}) registration is untouched");
   assert(injectedText.includes('return { forecast: "sunny", tempF: 72 };'), "original handler body is untouched");
   assert(injectedText.includes('fastify.get("/status"'), "unrelated GET /status route is untouched");
+
+  console.log("\n3b. Verifying the post-injection description selection...");
+  const selection = findDescriptionSelection(injectedText);
+  assert(Boolean(selection), "findDescriptionSelection finds the generated description line");
+  const selectedLineText = injectedText.split(/\r?\n/)[selection.line];
+  assert(selectedLineText.includes("// TODO: add the actual resource description"), "the found line is actually the description placeholder line");
+  const selectedValue = selectedLineText.slice(selection.startCharacter, selection.endCharacter);
+  assert(
+    selectedValue === "fastify-fresh-fixture — /weather ($0.02 USDC)",
+    `selection covers exactly the description string value, got "${selectedValue}"`,
+  );
+  assert(
+    selectedLineText[selection.startCharacter - 1] === '"' && selectedLineText[selection.endCharacter] === '"',
+    "selection bounds sit exactly inside the surrounding quotes, not on them",
+  );
 
   console.log("\n4. Installing fixture dependencies (npm install)...");
   execSync("npm install --no-audit --no-fund", { cwd: fixtureDir, stdio: "inherit" });
