@@ -601,19 +601,37 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       endpointsRoot.innerHTML = '<div class="empty-state">Set your payout address to see your endpoints.</div>';
       return;
     }
+    // The manual-URL "Activate endpoint" form is ALWAYS rendered below,
+    // regardless of how many listings already exist — a developer selling
+    // more than one endpoint needs to activate a second, third, etc. without
+    // ever going back to zero listings, which was the only way to reach this
+    // form before. Only the copy immediately around it changes: the
+    // empty-state explanation when there's nothing yet, vs. a short
+    // "Activate another endpoint" label once at least one listing exists —
+    // the underlying flow (runTestPaymentFlow -> startTestPaymentForManualUrl,
+    // via the exact same "testManualUrl" postMessage) is IDENTICAL either way
+    // and doesn't care how many listings existed when it was sent.
+    //
+    // "Activate" (not "Test") is used here because this action's intent is
+    // registering the endpoint in the Bazaar's discovery catalog, not just
+    // verifying it works — "Test" (kept on each already-listed card's own
+    // button below) is the more accurate word for a repeat payment against
+    // something already listed. Registration only actually happens if the
+    // route declares the Bazaar discovery extension (see
+    // generators/shared.ts's renderExtensionsField) — the payment alone
+    // does not guarantee it, so neither copy states that as a certainty.
+    const activateFormHtml = \`
+      <div class="activate-endpoint-form">
+        <div class="test-url-form">
+          <div class="test-url-input-frame">
+            <input type="text" id="test-url-input" class="mono" placeholder="https://your-endpoint.example.com/route" />
+          </div>
+          <button class="btn btn--outline" id="test-url-submit">Activate endpoint</button>
+        </div>
+      </div>
+    \`;
+
     if (data.listings.length === 0) {
-      // Copy reframed around "activate" rather than "test" — the underlying
-      // flow (runTestPaymentFlow -> startTestPaymentForManualUrl) is
-      // UNCHANGED, only the label/framing here changed, per the instruction.
-      // "Activate" is used because this action's intent is registering the
-      // endpoint in the Bazaar's discovery catalog, not just verifying it
-      // works — "Test" (kept on already-listed cards' own button, see
-      // renderEndpoints below) is the more accurate word for a repeat
-      // payment against something already listed. Registration only
-      // actually happens if the route declares the Bazaar discovery
-      // extension (see generators/shared.ts's renderExtensionsField) — the
-      // payment alone does not guarantee it, so the copy below no longer
-      // states that as a certainty.
       endpointsRoot.innerHTML = \`
         <div class="empty-state">
           No endpoints listed yet. Once you deploy your app, paste your live
@@ -621,43 +639,48 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           payment. If your route includes the Bazaar discovery extension
           (added automatically by the Add x402 payment command), your
           endpoint will appear here after the payment settles.
-          <div class="test-url-form">
-            <div class="test-url-input-frame">
-              <input type="text" id="test-url-input" class="mono" placeholder="https://your-endpoint.example.com/route" />
-            </div>
-            <button class="btn btn--outline" id="test-url-submit">Activate endpoint</button>
-          </div>
         </div>
+        \${activateFormHtml}
       \`;
-      const input = document.getElementById("test-url-input");
-      document.getElementById("test-url-submit").addEventListener("click", () => {
-        const url = input.value.trim();
-        if (url) vscode.postMessage({ type: "testManualUrl", url });
-      });
-      return;
+    } else {
+      const cardsHtml = data.listings
+        .map((listing) => {
+          const settledLine =
+            listing.lastSettled === undefined
+              ? "never settled"
+              : \`last settled \${relativeTime(listing.lastSettled)}\`;
+          return \`
+          <div class="endpoint-card">
+            <a class="resource-link mono" href="\${escapeHtml(listing.resource)}" target="_blank" rel="noreferrer">\${escapeHtml(listing.resource)}</a>
+            <div class="meta-row">
+              <span class="price">\${escapeHtml(listing.priceLabel)}</span>
+              <span class="badge badge--\${listing.ownershipState}">\${escapeHtml(BADGE_LABEL[listing.ownershipState] ?? "Unknown")}</span>
+            </div>
+            <div class="stats-row">
+              <span>\${listing.settlements} settlement\${listing.settlements === 1 ? "" : "s"} · \${escapeHtml(settledLine)}</span>
+              <button class="btn btn--outline" data-test-resource="\${escapeHtml(listing.resource)}" title="Fire a real testnet payment against this endpoint">Test</button>
+            </div>
+          </div>
+        \`;
+        })
+        .join("");
+
+      endpointsRoot.innerHTML = \`
+        \${cardsHtml}
+        <div class="activate-another-label">Activate another endpoint</div>
+        \${activateFormHtml}
+      \`;
     }
 
-    endpointsRoot.innerHTML = data.listings
-      .map((listing) => {
-        const settledLine =
-          listing.lastSettled === undefined
-            ? "never settled"
-            : \`last settled \${relativeTime(listing.lastSettled)}\`;
-        return \`
-        <div class="endpoint-card">
-          <a class="resource-link mono" href="\${escapeHtml(listing.resource)}" target="_blank" rel="noreferrer">\${escapeHtml(listing.resource)}</a>
-          <div class="meta-row">
-            <span class="price">\${escapeHtml(listing.priceLabel)}</span>
-            <span class="badge badge--\${listing.ownershipState}">\${escapeHtml(BADGE_LABEL[listing.ownershipState] ?? "Unknown")}</span>
-          </div>
-          <div class="stats-row">
-            <span>\${listing.settlements} settlement\${listing.settlements === 1 ? "" : "s"} · \${escapeHtml(settledLine)}</span>
-            <button class="btn btn--outline" data-test-resource="\${escapeHtml(listing.resource)}" title="Fire a real testnet payment against this endpoint">Test</button>
-          </div>
-        </div>
-      \`;
-      })
-      .join("");
+    // Wired unconditionally — the form above is always in the DOM now
+    // (empty-state or listings-present branch alike), so this listener
+    // attachment no longer needs its own early "return" the way the old
+    // empty-state-only branch did.
+    const input = document.getElementById("test-url-input");
+    document.getElementById("test-url-submit").addEventListener("click", () => {
+      const url = input.value.trim();
+      if (url) vscode.postMessage({ type: "testManualUrl", url });
+    });
 
     // The resource URL is the lookup key posted back to the extension host,
     // not an array index — indices go stale across re-renders/filtering, a

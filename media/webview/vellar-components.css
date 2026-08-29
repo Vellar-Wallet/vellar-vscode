@@ -201,6 +201,38 @@ body {
   align-self: flex-start;
 }
 
+/* My Endpoints' "Activate endpoint" form — ALWAYS rendered (see
+   renderEndpoints' own comment), not just in the empty state, so this
+   wrapper needs its own separation from whatever sits above it: the
+   empty-state copy paragraph in the zero-listings case, or the last
+   .endpoint-card in the listings-present case. Same border-top rhythm
+   .settlements-pager already uses for the equivalent "trailing control
+   below a list" position, so the two sections read consistently. */
+.activate-endpoint-form {
+  padding-top: var(--sp-3);
+  margin-top: var(--sp-1);
+  border-top: 1px solid var(--line);
+}
+.activate-endpoint-form .test-url-form {
+  margin-top: 0;
+}
+/* Only shown once at least one listing already exists (see
+   renderEndpoints) — makes explicit that the form right below is
+   ADDITIVE, not a replacement for the cards already listed above it. */
+.activate-another-label {
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+.activate-another-label + .activate-endpoint-form {
+  padding-top: var(--sp-2);
+  margin-top: 0;
+  border-top: 0;
+}
+
 /* Ownership-state badge. Fills only, per the source system's own contrast
    rule (mint/lime/sun never carry text on paper) — ink text sits ON the
    accent fill here, which is the one place those colors DO carry text
