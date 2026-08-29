@@ -8,11 +8,12 @@ name: CI
 #  - The original five exercise src/detectors, src/injector, and
 #    src/generators directly — genuinely vscode-free, no fake module needed
 #    at all.
-#  - Two (the sidebar's postMessage-leak audit and the test-payment assertion
-#    check) exercise code that DOES import "vscode" throughout
-#    (dataProvider.ts, webviewProvider.ts, runTestPayment.ts) — those run
-#    against scripts/vscode-test-stub.js, a small fake of the surface those
-#    modules actually call, substituted at bundle time via esbuild.
+#  - Three (the sidebar's postMessage-leak audit, the settlements pagination
+#    check, and the test-payment assertion check) exercise code that DOES
+#    import "vscode" throughout (dataProvider.ts, webviewProvider.ts,
+#    runTestPayment.ts) — those run against scripts/vscode-test-stub.js, a
+#    small fake of the surface those modules actually call, substituted at
+#    bundle time via esbuild.
 #  - One (the Horizon timeout regression check) exercises usdc.ts, which has
 #    NO vscode import at all — no stub needed there either, just a plain
 #    esbuild bundle with vscode marked external (a no-op, since it's never
@@ -98,6 +99,9 @@ jobs:
 
       - name: Run sidebar postMessage leak check
         run: node scripts/run-postmessage-leak-check.js
+
+      - name: Run settlements pagination check
+        run: node scripts/run-settlements-pagination-check.js
 
       - name: Run test-payment assertion check
         run: node scripts/run-testpayment-assertion-check.js

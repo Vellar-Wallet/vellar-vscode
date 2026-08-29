@@ -6,6 +6,7 @@ import {
   renderNextAppRouterSetupBlock,
   renderNextAppRouterWrapExport,
 } from "./generators/nextAppRouter";
+import { EXTENSIONS_TODO_MARKER } from "./generators/shared";
 import type { DetectedRoute, PaymentConfig } from "./types";
 
 /**
@@ -314,4 +315,54 @@ export function findDescriptionSelection(injectedText: string): DescriptionSelec
   if (secondQuote === -1) return null;
 
   return { line: lineIndex, startCharacter: firstQuote + 1, endCharacter: secondQuote };
+}
+
+/**
+ * Finds the FIRST TODO comment inside the generated `extensions:
+ * declareDiscoveryExtension({...})` block (the one inside `input` — the line
+ * whose full text IS shared.ts's own EXTENSIONS_TODO_MARKER, matched by
+ * `.includes`, which naturally finds the first occurrence if it ever
+ * appeared more than once) and returns a selection covering the comment's
+ * own editable text (everything after the leading `// `), so the developer
+ * can start typing immediately — same "select the editable content, not the
+ * surrounding syntax" shape as findDescriptionSelection above, just applied
+ * to a comment's text rather than a quoted string's value.
+ *
+ * REAL BUG, FOUND AND FIXED: an earlier version computed the selection start
+ * as `markerIndex + EXTENSIONS_TODO_MARKER.length + 1`, which only works if
+ * the marker is a PREFIX of the line with real content still following it.
+ * Once EXTENSIONS_TODO_MARKER became the line's ENTIRE text (fixing a
+ * separate collision bug — see that constant's own comment), that arithmetic
+ * pointed past the end of the line, selecting nothing. Fixed by computing
+ * the selection independently of the marker's length: find "// " on the
+ * matched line itself and select everything after it, exactly the same
+ * "locate the line via a marker, compute the selection from the line's own
+ * real syntax" split findDescriptionSelection already uses above (its marker
+ * finds the line; the quote characters, not the marker, define the
+ * selection bounds).
+ *
+ * Same "scan the final text, don't track offsets through edit composition"
+ * reasoning as findDescriptionSelection: simpler and more robust than
+ * threading position math through every other edit that ran.
+ *
+ * Returns `null` when the marker isn't found, or the line unexpectedly has
+ * no `//` — same non-error, no-op contract as findDescriptionSelection: the
+ * injection already succeeded, this is a cursor-placement nicety only.
+ */
+export function findFirstExtensionsTodoSelection(injectedText: string): DescriptionSelection | null {
+  const lines = injectedText.split(/\r?\n/);
+  const lineIndex = lines.findIndex((line) => line.includes(EXTENSIONS_TODO_MARKER));
+  if (lineIndex === -1) return null;
+
+  const line = lines[lineIndex];
+  // Select past "// TODO: " (comment marker, the "TODO:" label, and the
+  // space that follows it) to the descriptive text itself — "TODO:" is a
+  // fixed label, not something the developer is meant to retype, same
+  // reasoning as findDescriptionSelection selecting only the quoted VALUE,
+  // never the surrounding `description: "..."` syntax around it.
+  const todoLabel = "TODO:";
+  const labelIndex = line.indexOf(todoLabel);
+  if (labelIndex === -1) return null;
+  const startCharacter = labelIndex + todoLabel.length + 1;
+  return { line: lineIndex, startCharacter, endCharacter: line.length };
 }

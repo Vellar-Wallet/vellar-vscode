@@ -37,6 +37,7 @@ const {
   validatePriceInput,
   hasExistingGate,
   findDescriptionSelection,
+  findFirstExtensionsTodoSelection,
 } = require(path.join(root, ".test-build", "testEntry.js"));
 
 function assert(condition, message) {
@@ -92,31 +93,55 @@ try {
   assert(injectedText.includes('import { paymentMiddleware, x402ResourceServer } from "@x402/express";'), "Express imports injected");
   assert(injectedText.includes('import { ExactStellarScheme } from "@x402/stellar/exact/server";'), "ExactStellarScheme import injected");
   assert(injectedText.includes('import { HTTPFacilitatorClient } from "@x402/core/server";'), "HTTPFacilitatorClient import injected");
+  assert(
+    injectedText.includes('import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";'),
+    "Bazaar extension imports injected",
+  );
   assert(injectedText.includes("https://vellar-facilitator.onrender.com"), "facilitator URL injected");
   assert(injectedText.includes(config.payToAddress), "payToAddress injected");
   assert(injectedText.includes('price: "$0.05"'), "price injected as dollar-string");
   assert(injectedText.includes('"stellar:testnet" as const'), "network injected with literal type preserved");
   assert(injectedText.includes('serviceName: "express-fresh-fixture",'), "serviceName injected");
   assert(injectedText.includes('tags: ["api", "x402"],'), "tags injected");
+  assert(injectedText.includes(".registerExtension(bazaarResourceServerExtension);"), "bazaarResourceServerExtension registered on the server chain");
+  assert(injectedText.includes("extensions: declareDiscoveryExtension({"), "Bazaar discovery extension declared on the route config");
   assert(injectedText.includes("app.use(paymentMiddleware(x402Routes, x402Server))"), "app.use(paymentMiddleware(...)) injected");
   assert(injectedText.includes('app.get("/weather"'), "original /weather handler registration is untouched");
   assert(injectedText.includes('res.json({ forecast: "sunny", tempF: 72 });'), "original handler body is untouched");
   assert(injectedText.includes('app.post("/reports"'), "unrelated POST /reports route is untouched");
   assert(injectedText.includes('app.get("/users/:id"'), "unrelated GET /users/:id route is untouched");
 
-  console.log("\n4b. Verifying the post-injection description selection...");
-  const selection = findDescriptionSelection(injectedText);
-  assert(Boolean(selection), "findDescriptionSelection finds the generated description line");
-  const selectedLineText = injectedText.split(/\r?\n/)[selection.line];
-  assert(selectedLineText.includes("// TODO: add the actual resource description"), "the found line is actually the description placeholder line");
-  const selectedValue = selectedLineText.slice(selection.startCharacter, selection.endCharacter);
+  console.log("\n4b. Verifying the post-injection cursor selection...");
+  // The extensions-block TODO (inside `input`) is now the active
+  // post-injection cursor placement — it replaced the description
+  // selection as the auto-selected TODO, per the instruction: the
+  // description TODO is still generated, just no longer auto-selected.
+  const extSelection = findFirstExtensionsTodoSelection(injectedText);
+  assert(Boolean(extSelection), "findFirstExtensionsTodoSelection finds the generated extensions TODO line");
+  const injectedLines = injectedText.split(/\r?\n/);
+  const extLineText = injectedLines[extSelection.line];
   assert(
-    selectedValue === "express-fresh-fixture — /weather ($0.05 USDC)",
-    `selection covers exactly the description string value, got "${selectedValue}"`,
+    extLineText.includes("// TODO: example values for this endpoint's query/body"),
+    "the found line is actually the extensions input TODO placeholder line",
   );
+  const extSelectedValue = extLineText.slice(extSelection.startCharacter, extSelection.endCharacter);
   assert(
-    selectedLineText[selection.startCharacter - 1] === '"' && selectedLineText[selection.endCharacter] === '"',
-    "selection bounds sit exactly inside the surrounding quotes, not on them",
+    extSelectedValue === "example values for this endpoint's query/body",
+    `selection covers exactly the TODO's descriptive text, got "${extSelectedValue}"`,
+  );
+
+  // The description TODO must still be present in the generated code (it's
+  // not removed, just no longer the auto-selected one) — checked as plain
+  // text presence, explicitly NOT as the active selection.
+  assert(
+    injectedText.includes('description: "express-fresh-fixture — /weather ($0.05 USDC)", // TODO: add the actual resource description'),
+    "the description TODO still exists in the generated code",
+  );
+  const descSelection = findDescriptionSelection(injectedText);
+  assert(Boolean(descSelection), "findDescriptionSelection can still find the description line (function still works, just unused post-injection)");
+  assert(
+    descSelection.line !== extSelection.line,
+    "the description selection and the active extensions-TODO selection are on different lines — the description is present but NOT the one selected",
   );
 
   console.log("\n5. Installing fixture dependencies (npm install)...");

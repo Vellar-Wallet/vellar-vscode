@@ -138,6 +138,11 @@ interface ExplorerPayment {
 }
 interface ExplorerPaymentListResponse {
   items: ExplorerPayment[];
+  /** Present on every response per the API's documented shape (see the
+   *  comment above this interface) — nextCursor is null/absent once there is
+   *  no further page. Never assumed non-null; every read of it below treats
+   *  a missing/null cursor as "no next page" explicitly. */
+  pagination?: { nextCursor?: string | null; limit?: number };
 }
 
 export interface SettlementEntry {
@@ -163,7 +168,9 @@ export interface SettlementEntry {
   payer: string;
   closedAt: string;
 }
-export type SettlementsState = { kind: "unconfigured" } | { kind: "loaded"; entries: SettlementEntry[] };
+export type SettlementsState =
+  | { kind: "unconfigured" }
+  | { kind: "loaded"; entries: SettlementEntry[]; nextCursor: string | undefined };
 
 // --- Earnings Summary (Step 4) ----------------------------------------------
 // Deliberately NOT a fifth PollingSource: this is a pure function of the
@@ -394,16 +401,53 @@ export class DataProvider implements vscode.Disposable {
     return { kind: "loaded", listings };
   }
 
+  /** Page 1 only — this is the fetcher wired into settlementsSource's poller
+   *  (see the constructor). Notifications (checkSettlementNotifications) and
+   *  Earnings Summary (computeEarnings, via webviewProvider's
+   *  postEarningsUpdate) both consume this poller's own onDidUpdate stream
+   *  directly, and both need to always see page 1 / newest-first — so this
+   *  poller must never be repurposed to fetch whatever page the developer
+   *  happens to be viewing in Recent Settlements. Prev/Next pagination is
+   *  handled entirely by the separate, on-demand fetchSettlementsPage below,
+   *  which shares this same fetch/map logic but is never wired into the
+   *  poller and never affects what notifications or earnings see. */
   private async fetchSettlements(): Promise<SettlementsState> {
     const address = DataProvider.getConfiguredAddress();
     if (!address) return { kind: "unconfigured" };
+    return this.fetchSettlementsPageAt(address, undefined);
+  }
 
+  /**
+   * On-demand fetch for one settlements page, driven by Recent Settlements'
+   * Prev/Next buttons (see webviewProvider.ts's settlementsPage handling).
+   * Deliberately NOT a PollingSource — there is no timer, floor, or
+   * pause-on-blur concern for a single user-triggered click the way there is
+   * for the always-on page-1 poll above; a plain one-shot async call is all
+   * this needs, and using PollingSource for it would mean either sharing its
+   * page-1 timer state (wrong — polling and paging must stay independent
+   * per the above) or standing up a whole separate poller instance that's
+   * only ever "started" by hand, which buys nothing.
+   *
+   * `cursor` is `undefined` for page 1, and whatever the previous page's
+   * `nextCursor` was for any later page — this class does not remember a
+   * cursor stack itself, that's the webview provider's job (mirroring how
+   * this class has never owned "which page/tab is currently shown" state
+   * for any other section either).
+   */
+  async fetchSettlementsPage(cursor: string | undefined): Promise<SettlementsState> {
+    const address = DataProvider.getConfiguredAddress();
+    if (!address) return { kind: "unconfigured" };
+    return this.fetchSettlementsPageAt(address, cursor);
+  }
+
+  private async fetchSettlementsPageAt(address: string, cursor: string | undefined): Promise<SettlementsState> {
     // payTo filters server-side to this address's own settlements — the explorer
     // does the same "seller === address" match dataProvider does for endpoints,
-    // just on-chain rather than in the discovery catalog. One call, already
+    // just on-chain rather than in the discovery catalog. Each page is already
     // sorted newest-first (confirmed against live data), no client-side sort.
+    const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
     const response = await httpsGetJson<ExplorerPaymentListResponse>(
-      `${EXPLORER_BASE}/payments?payTo=${encodeURIComponent(address)}&limit=${SETTLEMENTS_LIMIT}`,
+      `${EXPLORER_BASE}/payments?payTo=${encodeURIComponent(address)}&limit=${SETTLEMENTS_LIMIT}${cursorParam}`,
     );
 
     const entries: SettlementEntry[] = response.items.map((item) => ({
@@ -415,7 +459,7 @@ export class DataProvider implements vscode.Disposable {
       closedAt: item.closedAt,
     }));
 
-    return { kind: "loaded", entries };
+    return { kind: "loaded", entries, nextCursor: response.pagination?.nextCursor ?? undefined };
   }
 
   dispose(): void {

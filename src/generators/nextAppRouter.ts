@@ -17,7 +17,8 @@ import { FACILITATOR_URL, renderAccepts, renderDiscoveryFields, renderPayToGuard
 
 const IMPORTS = `import { withX402, x402ResourceServer } from "@x402/next";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
-import { HTTPFacilitatorClient } from "@x402/core/server";`;
+import { HTTPFacilitatorClient } from "@x402/core/server";
+import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";`;
 
 export function renderNextAppRouterImports(): string {
   return IMPORTS;
@@ -32,10 +33,9 @@ export function renderNextAppRouterSetupBlock(route: DetectedRoute, config: Paym
     `};`,
     ``,
     `const x402FacilitatorClient = new HTTPFacilitatorClient({ url: "${FACILITATOR_URL}" });`,
-    `const x402Server = new x402ResourceServer(x402FacilitatorClient).register(`,
-    `  "stellar:testnet",`,
-    `  new ExactStellarScheme(),`,
-    `);`,
+    `const x402Server = new x402ResourceServer(x402FacilitatorClient)`,
+    `  .register("stellar:testnet", new ExactStellarScheme())`,
+    `  .registerExtension(bazaarResourceServerExtension);`,
     ``,
     `const x402RouteConfig = {`,
     renderAccepts(config, "  "),

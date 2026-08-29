@@ -1,0 +1,47 @@
+{
+  // Backs launch.json's two debug configs: a one-shot "compile" build (the
+  // default build task, so ${defaultBuildTask} in launch.json resolves to
+  // it) and a background "watch" task for live-reload while iterating.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "compile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$tsc", "$esbuild"],
+      "label": "npm: compile"
+    },
+    {
+      // esbuild.js (this project's watch script) only ever logs
+      // "[watch] build finished, watching for changes..." — on the initial
+      // build AND every rebuild — it never prints a "build started" line.
+      // Confirmed by actually running `node esbuild.js --watch` and
+      // touching a source file, not assumed from esbuild's usual CLI
+      // output. So the background task's begin/end patterns both key off
+      // that one real line, with `activeOnStart` covering the gap before
+      // the first build completes.
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "typescript",
+        "source": "esbuild",
+        "applyTo": "closedDocuments",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^✘ \\[ERROR\\] (.*)$",
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "\\[watch\\] build finished",
+          "endsPattern": "\\[watch\\] build finished"
+        }
+      },
+      "label": "npm: watch"
+    }
+  ]
+}

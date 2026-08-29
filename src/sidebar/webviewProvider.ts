@@ -8,6 +8,7 @@ import {
   type WalletBalanceState,
 } from "./dataProvider";
 import { formatDecimalAmount, looksLikeTestableResourceUrl, truncateMiddle } from "./format";
+import { logAndGenericError } from "./outputChannel";
 import { FocusVisibilityGate } from "./polling";
 import { runTestPayment, type TestPaymentTarget } from "./testPayment/runTestPayment";
 
@@ -29,6 +30,39 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   // — a real testnet payment has a real cost and shouldn't stack silently.
   private testPaymentInFlight = false;
 
+  /**
+   * Recent Settlements pagination state — owned entirely here, not in
+   * DataProvider (mirrors DataProvider never owning "which page/tab is
+   * shown" for any other section) and not in the webview's own JS (a fresh
+   * webview loses all JS-side state every time it's hidden, since
+   * retainContextWhenHidden is false — see this class's own doc comment).
+   *
+   * settlementsSource (DataProvider.settlements) ALWAYS polls page 1 only —
+   * see fetchSettlements' own comment for why that must never change.
+   * Pages beyond 1 are fetched on demand via DataProvider.fetchSettlementsPage
+   * and held here, independent of the poller entirely.
+   *
+   * cursorStack[0] is always undefined (page 1 needs no cursor); cursorStack[n]
+   * is the cursor that fetches page n+1, pushed the first time Next reaches a
+   * page not visited yet. pageIndex is 0 when on page 1 (in which case the
+   * poller's own current/onDidUpdate data IS the display state — no separate
+   * fetch happens for page 1, see postSettlementsUpdate).
+   */
+  private settlementsCursorStack: (string | undefined)[] = [undefined];
+  private settlementsPageIndex = 0;
+  /** Only used while pageIndex > 0 — the last on-demand page fetch's result,
+   *  since the poller's `.current` only ever reflects page 1. Left stale
+   *  (unused) whenever pageIndex returns to 0, at which point page-1 data
+   *  always comes from the poller directly instead. */
+  private settlementsPagedResult: import("./polling").PollResult<SettlementsState> | undefined;
+  /** The newest entry's txHash last shown on page 1, used to detect "the poller
+   *  just saw a genuinely new settlement" (vs. just another poll tick with an
+   *  unchanged top entry) so Recent Settlements can snap back to page 1 only
+   *  when there is actually something new to show there — see
+   *  handleSettlementsPollUpdate. undefined until the first "ok" page-1 result
+   *  ever arrives, so the very first load never counts as "new". */
+  private settlementsKnownTopTxHash: string | undefined;
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly dataProvider: DataProvider,
@@ -38,15 +72,55 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     this.gate.add(this.dataProvider.settlements);
     this.dataProvider.wallet.onDidUpdate((result) => this.postWalletUpdate(result));
     this.dataProvider.endpoints.onDidUpdate((result) => this.postEndpointsUpdate(result));
-    this.dataProvider.settlements.onDidUpdate((result) => {
-      this.postSettlementsUpdate(result);
-      // Earnings has no poller of its own (see computeEarnings' own comment) — it
-      // recomputes on the exact same event settlements already fires, so the two
-      // sections can never show numbers derived from two different fetches.
-      this.postEarningsUpdate(result);
-    });
+    this.dataProvider.settlements.onDidUpdate((result) => this.handleSettlementsPollUpdate(result));
 
     vscode.window.onDidChangeWindowState((state) => this.gate.setFocused(state.focused));
+  }
+
+  /**
+   * Every page-1 poll tick arrives here (unconditionally — the poller itself
+   * is untouched by pagination, see the settlementsCursorStack doc comment
+   * above). Earnings Summary always recomputes from this page-1 data,
+   * regardless of what page Recent Settlements is currently showing — that
+   * was an explicit, deliberate choice: earnings stays "based on your N most
+   * recent settlements" and never means something different depending on
+   * pagination state.
+   *
+   * Recent Settlements itself only re-renders from THIS poll data when the
+   * developer is on page 1 (pageIndex === 0) OR when this tick's newest
+   * entry is genuinely new compared to the last one this class has seen —
+   * in the latter case the view snaps back to page 1 to surface it, exactly
+   * the "new settlement arrived while paging" behavior chosen for this
+   * feature. A tick whose newest txHash is unchanged never touches a paged
+   * (pageIndex > 0) view the developer might currently be looking at.
+   */
+  private handleSettlementsPollUpdate(result: import("./polling").PollResult<SettlementsState>): void {
+    this.postEarningsUpdate(result);
+
+    if (result.status !== "ok" || result.data.kind !== "loaded") {
+      // loading/error/unconfigured: only page 1 could ever be affected, and
+      // only page 1 is ever this poller's concern — a paged view keeps
+      // showing its own last-fetched page/error untouched.
+      if (this.settlementsPageIndex === 0) this.postSettlementsUpdate(result);
+      return;
+    }
+
+    const newTopTxHash = result.data.entries[0]?.txHash;
+    const isGenuinelyNew =
+      this.settlementsKnownTopTxHash !== undefined &&
+      newTopTxHash !== undefined &&
+      newTopTxHash !== this.settlementsKnownTopTxHash;
+    this.settlementsKnownTopTxHash = newTopTxHash;
+
+    if (isGenuinelyNew && this.settlementsPageIndex !== 0) {
+      // Snap back to page 1 so the new settlement is immediately visible,
+      // per the chosen "new data pulls the view back to page 1" behavior.
+      this.settlementsPageIndex = 0;
+      this.settlementsCursorStack = [undefined];
+      this.settlementsPagedResult = undefined;
+    }
+
+    if (this.settlementsPageIndex === 0) this.postSettlementsUpdate(result);
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -68,7 +142,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       this.gate.setVisible(webviewView.visible);
       if (webviewView.visible) {
         this.postWalletUpdate(this.dataProvider.wallet.current);
-        this.postSettlementsUpdate(this.dataProvider.settlements.current);
+        this.postSettlementsUpdate(this.currentSettlementsResult());
         this.postEarningsUpdate(this.dataProvider.settlements.current);
       }
     });
@@ -76,11 +150,25 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
 
     // A fresh webview (every reveal, given retainContextWhenHidden: false) starts
     // with no data of its own — send whatever the DataProvider already has
-    // immediately, rather than waiting for the next poll tick.
+    // immediately, rather than waiting for the next poll tick. Settlements
+    // specifically uses currentSettlementsResult(), NOT
+    // dataProvider.settlements.current directly, so a webview rebuilt while
+    // the developer was on page 2/3 (e.g. the sidebar was hidden and shown
+    // again) redraws the page it was actually on, not silently back to page 1.
     this.postWalletUpdate(this.dataProvider.wallet.current);
     this.postEndpointsUpdate(this.dataProvider.endpoints.current);
-    this.postSettlementsUpdate(this.dataProvider.settlements.current);
+    this.postSettlementsUpdate(this.currentSettlementsResult());
     this.postEarningsUpdate(this.dataProvider.settlements.current);
+  }
+
+  /** The result that should currently be shown for Recent Settlements —
+   *  the poller's own page-1 data while pageIndex is 0, or the last
+   *  on-demand page fetch otherwise. The one place both resolveWebviewView
+   *  and the visibility-change handler read from, so a webview rebuild never
+   *  has its own separate (and easy to get out of sync) copy of this logic. */
+  private currentSettlementsResult(): import("./polling").PollResult<SettlementsState> {
+    if (this.settlementsPageIndex === 0) return this.dataProvider.settlements.current;
+    return this.settlementsPagedResult ?? { status: "loading" };
   }
 
   /**
@@ -120,9 +208,95 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   /** SettlementEntry.payer is a full Stellar address — same rule as the wallet's
    *  own payToAddress, it must never cross into the webview's JS context
    *  untruncated. Bridged through toSettlementsDisplayState below, the one path
-   *  that ever turns SettlementsState into what postMessage actually sends. */
+   *  that ever turns SettlementsState into what postMessage actually sends.
+   *
+   *  Pagination metadata (page number, hasPrev, hasNext) is computed HERE from
+   *  this class's own cursor-stack state, not carried inside SettlementsState
+   *  itself — DataProvider has no notion of "which page is currently shown",
+   *  by design (see settlementsCursorStack's own doc comment). */
   private postSettlementsUpdate(state: import("./polling").PollResult<SettlementsState>): void {
-    void this.view?.webview.postMessage({ type: "settlements", state: toSettlementsDisplayState(state) });
+    const page = this.settlementsPageIndex + 1;
+    const hasPrev = this.settlementsPageIndex > 0;
+    const hasNext = state.status === "ok" && state.data.kind === "loaded" && state.data.nextCursor !== undefined;
+    void this.view?.webview.postMessage({
+      type: "settlements",
+      state: toSettlementsDisplayState(state),
+      pagination: { page, hasPrev, hasNext },
+    });
+  }
+
+  /**
+   * Prev/Next click handler (see handleMessage's "settlementsPage" case).
+   * `direction` is exactly "prev" or "next" — validated in handleMessage
+   * before this is ever called, same "narrow at the message boundary"
+   * discipline testPayment/testManualUrl already use for their own payloads.
+   *
+   * Page 1 (pageIndex 0) is never fetched here — it always comes from
+   * settlementsSource's own poller/current, per fetchSettlements' own
+   * comment on why paging must stay independent of the always-on poll. Only
+   * pageIndex > 0 ever calls DataProvider.fetchSettlementsPage.
+   */
+  private async goToSettlementsPage(direction: "prev" | "next"): Promise<void> {
+    if (direction === "prev") {
+      if (this.settlementsPageIndex === 0) return; // already on page 1, nothing to do
+      this.settlementsPageIndex -= 1;
+
+      if (this.settlementsPageIndex === 0) {
+        // Back on page 1 — the poller's own current data is authoritative,
+        // no fetch needed.
+        this.settlementsPagedResult = undefined;
+        this.postSettlementsUpdate(this.dataProvider.settlements.current);
+        return;
+      }
+
+      // Back to a page between 1 and the one we just left (page
+      // settlementsPageIndex + 1, 1-indexed) — re-fetch it using the cursor
+      // that reaches it, which is whatever page settlementsPageIndex - 1
+      // (1-indexed) stored at the time IT was first reached. Re-fetching
+      // rather than caching full page content: settlements are append-only
+      // from the newest end, so an already-visited page's content genuinely
+      // doesn't change, but re-fetching is simpler than a full page cache
+      // and costs one extra request, not a correctness issue either way.
+      const cursorForThisPage = this.settlementsCursorStack[this.settlementsPageIndex - 1];
+      await this.fetchAndShowSettlementsPage(cursorForThisPage);
+      return;
+    }
+
+    // direction === "next"
+    const currentResult = this.currentSettlementsResult();
+    const nextCursor =
+      currentResult.status === "ok" && currentResult.data.kind === "loaded" ? currentResult.data.nextCursor : undefined;
+    if (nextCursor === undefined) return; // already on the last known page, nothing to do
+
+    this.settlementsPageIndex += 1;
+    // settlementsCursorStack[i] holds the cursor that reaches page i+2
+    // (1-indexed pages, 0-indexed stack) — captured HERE, from the page we
+    // are LEAVING's own nextCursor, at the exact moment we leave it, rather
+    // than read back out of the stack after the index already moved. This
+    // is also what makes a later Prev-then-Next-again reach the same page
+    // without re-deriving its cursor from scratch.
+    this.settlementsCursorStack[this.settlementsPageIndex - 1] = nextCursor;
+    await this.fetchAndShowSettlementsPage(nextCursor);
+  }
+
+  /** Shared by both the "reach a page beyond 1 for the first time" and
+   *  "re-fetch a previously-visited page beyond 1" paths in
+   *  goToSettlementsPage above — posts a "loading" state immediately, then
+   *  the real result once DataProvider.fetchSettlementsPage resolves (or an
+   *  "error" result if it rejects, same one-path-to-a-user-visible-error
+   *  rule logAndGenericError enforces everywhere else in this file). */
+  private async fetchAndShowSettlementsPage(cursor: string | undefined): Promise<void> {
+    this.postSettlementsUpdate({ status: "loading" });
+    let result: import("./polling").PollResult<SettlementsState>;
+    try {
+      const data = await this.dataProvider.fetchSettlementsPage(cursor);
+      result = { status: "ok", data };
+    } catch (err) {
+      logAndGenericError("settlement page fetch failed", err);
+      result = { status: "error" };
+    }
+    this.settlementsPagedResult = result;
+    this.postSettlementsUpdate(result);
   }
 
   /** EarningsSummary is already only aggregate numbers/strings — no address of
@@ -175,6 +349,15 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     if (msg.type === "testManualUrl") {
       const url = (message as { url?: unknown }).url;
       if (typeof url === "string") void this.startTestPaymentForManualUrl(url);
+      return;
+    }
+    if (msg.type === "settlementsPage") {
+      // Narrowed to exactly "prev"/"next" here, same "never trust the
+      // webview's payload beyond a known-safe shape" rule copyAddress/
+      // testManualUrl already follow above — an unrecognized value is
+      // silently ignored rather than acted on.
+      const direction = (message as { direction?: unknown }).direction;
+      if (direction === "prev" || direction === "next") void this.goToSettlementsPage(direction);
       return;
     }
   }
@@ -422,19 +605,26 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       // Copy reframed around "activate" rather than "test" — the underlying
       // flow (runTestPaymentFlow -> startTestPaymentForManualUrl) is
       // UNCHANGED, only the label/framing here changed, per the instruction.
-      // "Activate" is used because this action's real effect is registering
-      // the endpoint in the Bazaar's discovery catalog, not just verifying
-      // it works — "Test" (kept on already-listed cards' own button, see
+      // "Activate" is used because this action's intent is registering the
+      // endpoint in the Bazaar's discovery catalog, not just verifying it
+      // works — "Test" (kept on already-listed cards' own button, see
       // renderEndpoints below) is the more accurate word for a repeat
-      // payment against something already listed.
+      // payment against something already listed. Registration only
+      // actually happens if the route declares the Bazaar discovery
+      // extension (see generators/shared.ts's renderExtensionsField) — the
+      // payment alone does not guarantee it, so the copy below no longer
+      // states that as a certainty.
       endpointsRoot.innerHTML = \`
         <div class="empty-state">
           No endpoints listed yet. Once you deploy your app, paste your live
-          endpoint URL below to activate it — this fires a real payment that
-          registers it in the Vellar Bazaar and makes it discoverable by
-          developers and AI agents.
+          endpoint URL below and click Activate endpoint to send a real test
+          payment. If your route includes the Bazaar discovery extension
+          (added automatically by the Add x402 payment command), your
+          endpoint will appear here after the payment settles.
           <div class="test-url-form">
-            <input type="text" id="test-url-input" class="mono" placeholder="https://your-endpoint.example.com/route" />
+            <div class="test-url-input-frame">
+              <input type="text" id="test-url-input" class="mono" placeholder="https://your-endpoint.example.com/route" />
+            </div>
             <button class="btn btn--outline" id="test-url-submit">Activate endpoint</button>
           </div>
         </div>
@@ -494,7 +684,12 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     return hash.length <= 6 ? hash : \`\${hash.slice(0, 6)}…\`;
   }
 
-  function renderSettlements(state) {
+  // pagination is undefined on a "loading"/"error"/first-ever message (the
+  // extension host always sends it alongside settlements state today, but
+  // this function still degrades to "no pager" rather than throwing if it
+  // were ever missing — same defensiveness as every other field read off
+  // event.data below).
+  function renderSettlements(state, pagination) {
     if (state.status === "loading") {
       settlementsRoot.innerHTML = '<div class="empty-state">Loading…</div>';
       return;
@@ -508,12 +703,12 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       settlementsRoot.innerHTML = '<div class="empty-state">Set your payout address to see your settlements.</div>';
       return;
     }
-    if (data.entries.length === 0) {
+    if (data.entries.length === 0 && (!pagination || pagination.page === 1)) {
       settlementsRoot.innerHTML = '<div class="empty-state">No settlements yet.</div>';
       return;
     }
 
-    settlementsRoot.innerHTML = data.entries
+    const rows = data.entries
       .map(
         (entry) => \`
         <div class="settlement-row">
@@ -529,6 +724,30 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       \`,
       )
       .join("");
+
+    // The pager only ever needs to show once there's somewhere else to go —
+    // page 1 with no next page (the common case for a developer with only a
+    // few settlements) shows no pager at all, matching how this sidebar
+    // never shows controls with nothing for them to do.
+    const showPager = pagination && (pagination.hasPrev || pagination.hasNext);
+    const pagerHtml = !showPager
+      ? ""
+      : \`
+        <div class="settlements-pager">
+          <button class="btn btn--outline" id="settlements-prev" \${pagination.hasPrev ? "" : "disabled"}>← Prev</button>
+          <span class="settlements-pager-label">Page \${pagination.page}</span>
+          <button class="btn btn--outline" id="settlements-next" \${pagination.hasNext ? "" : "disabled"}>Next →</button>
+        </div>
+      \`;
+
+    settlementsRoot.innerHTML = rows + pagerHtml;
+
+    if (showPager) {
+      const prevBtn = document.getElementById("settlements-prev");
+      const nextBtn = document.getElementById("settlements-next");
+      if (pagination.hasPrev) prevBtn.addEventListener("click", () => vscode.postMessage({ type: "settlementsPage", direction: "prev" }));
+      if (pagination.hasNext) nextBtn.addEventListener("click", () => vscode.postMessage({ type: "settlementsPage", direction: "next" }));
+    }
   }
 
   // --- Earnings Summary -----------------------------------------------------
@@ -580,7 +799,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   window.addEventListener("message", (event) => {
     if (event.data?.type === "wallet") render(event.data.state);
     if (event.data?.type === "endpoints") renderEndpoints(event.data.state);
-    if (event.data?.type === "settlements") renderSettlements(event.data.state);
+    if (event.data?.type === "settlements") renderSettlements(event.data.state, event.data.pagination);
     if (event.data?.type === "earnings") renderEarnings(event.data.state);
   });
 </script>

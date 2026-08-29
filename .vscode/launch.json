@@ -1,0 +1,26 @@
+{
+  // Dev-only debug config — not shipped in the packaged .vsix (see .vscodeignore).
+  // F5 (or Run and Debug → "Run Extension") builds once via the "compile"
+  // pre-launch task, then opens a second "Extension Development Host" window
+  // with this extension loaded, so sidebar/onboarding copy and the code
+  // generator's real output can be exercised by hand.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "${defaultBuildTask}"
+    },
+    {
+      "name": "Run Extension (watch)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "npm: watch"
+    }
+  ]
+}

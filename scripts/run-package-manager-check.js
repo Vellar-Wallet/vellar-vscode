@@ -64,7 +64,7 @@ try {
     "finds the SUB-PACKAGE's directory (services/policy-service), not the monorepo root — so `pnpm add` lands in the right package.json",
   );
   assert(
-    renderInstallCommand("pnpm", requiredPackagesFor("fastify")) === "pnpm add @x402/core @x402/stellar @x402/fastify",
+    renderInstallCommand("pnpm", requiredPackagesFor("fastify")) === "pnpm add @x402/core @x402/stellar @x402/extensions @x402/fastify",
     "renders the correct pnpm add command with fastify's required packages",
   );
 
@@ -81,7 +81,7 @@ try {
   assert(detectPackageManager(npmRouteFile, npmRoot) === "npm", "detects npm from package-lock.json");
   assert(findNearestPackageDir(npmRouteFile, npmRoot) === npmRoot, "finds the root package.json directory");
   assert(
-    renderInstallCommand("npm", requiredPackagesFor("express")) === "npm install @x402/core @x402/stellar @x402/express",
+    renderInstallCommand("npm", requiredPackagesFor("express")) === "npm install @x402/core @x402/stellar @x402/extensions @x402/express",
     "renders the correct npm install command with express's required packages",
   );
 
@@ -96,7 +96,7 @@ try {
   console.log("\n3. Yarn project...");
   assert(detectPackageManager(yarnRouteFile, yarnRoot) === "yarn", "detects yarn from yarn.lock");
   assert(
-    renderInstallCommand("yarn", requiredPackagesFor("next-app-router")) === "yarn add @x402/core @x402/stellar @x402/next",
+    renderInstallCommand("yarn", requiredPackagesFor("next-app-router")) === "yarn add @x402/core @x402/stellar @x402/extensions @x402/next",
     "renders the correct yarn add command with next-app-router's required packages",
   );
 

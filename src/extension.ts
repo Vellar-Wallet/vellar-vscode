@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { detectExpressFastifyRoutes } from "./detectors/expressFastify";
 import { detectNextAppRouterRoutes, detectNextPagesRouterRoutes } from "./detectors/nextjs";
 import { hasExistingGate } from "./gateMarker";
-import { computeEdits, findDescriptionSelection, type TextEdit } from "./injector";
+import { computeEdits, findFirstExtensionsTodoSelection, type DescriptionSelection, type TextEdit } from "./injector";
 import { PAGES_ROUTER_GUIDANCE } from "./generators/nextPagesRouter";
 import { detectPackageManager, findNearestPackageDir, renderInstallCommand } from "./packageManager";
 import { DEFAULT_PRICE_USDC, validatePriceInput } from "./priceValidation";
@@ -144,9 +144,12 @@ async function addPaymentCommand(): Promise<void> {
  * Copy change only: the message no longer echoes the install command inline
  * (the button itself still knows what to run, from `installCommand` below —
  * only the DISPLAYED sentence changed) and now points the developer at
- * "activate your endpoint in the Vellar sidebar" — the first time "activate"
- * appears in the developer-facing flow, setting up the empty state's own
- * "Activate endpoint" language rather than introducing a new word there.
+ * clicking "Activate endpoint" in the Vellar sidebar, matching the empty
+ * state's own button label. It no longer claims the payment alone lists the
+ * endpoint in the Bazaar — that only happens if the route declares the
+ * Bazaar discovery extension (which the generator now adds automatically),
+ * so the copy instead says the endpoint appears in My Endpoints once the
+ * payment settles.
  */
 async function offerDependencyInstall(
   editor: vscode.TextEditor,
@@ -164,7 +167,8 @@ async function offerDependencyInstall(
 
   const choice = await vscode.window.showInformationMessage(
     `Vellar x402: added a $${priceUsdc} USDC payment gate to ${route.method} ${route.routePath}. ` +
-      `Deploy your app, then activate your endpoint in the Vellar sidebar to list it in the Bazaar.`,
+      `Deploy your app, then open the Vellar sidebar and click Activate endpoint to send a real payment. ` +
+      `Your endpoint will appear in My Endpoints once it settles.`,
     "Install dependencies",
     "Open Vellar sidebar",
   );
@@ -256,14 +260,20 @@ async function applyRouteInjection(
     }
   });
 
-  selectGeneratedDescription(editor);
+  selectFirstExtensionsTodo(editor);
 }
 
 /**
- * Moves the cursor to the generated `description: "...", // TODO: add the
- * actual resource description` value and selects the quoted string so the
- * developer can start typing a real description immediately, without hunting
- * for the line themselves.
+ * Moves the cursor to the FIRST `// TODO:` comment inside the generated
+ * `extensions: declareDiscoveryExtension({...})` block (the one inside
+ * `input`) and selects its text, so the developer sees immediately that
+ * Bazaar discoverability needs real input/output info filled in — this is
+ * the more consequential TODO to surface (it decides whether the endpoint
+ * can ever become discoverable at all), so it replaces the description
+ * field's own TODO as the active post-injection cursor placement.
+ * findDescriptionSelection (injector.ts) still exists and is still tested —
+ * the description TODO is still generated, just no longer auto-selected
+ * here.
  *
  * Runs after `editor.edit()` has resolved (reads the settled document, not the
  * pre-edit snapshot). Nice-to-have only: the injection already succeeded by this
@@ -271,8 +281,12 @@ async function applyRouteInjection(
  * shape than expected — this does nothing rather than throwing or surfacing an
  * error over a cursor-placement detail.
  */
-function selectGeneratedDescription(editor: vscode.TextEditor): void {
-  const selection = findDescriptionSelection(editor.document.getText());
+function selectFirstExtensionsTodo(editor: vscode.TextEditor): void {
+  const selection = findFirstExtensionsTodoSelection(editor.document.getText());
+  applyEditorSelection(editor, selection);
+}
+
+function applyEditorSelection(editor: vscode.TextEditor, selection: DescriptionSelection | null): void {
   if (!selection) return;
 
   const start = new vscode.Position(selection.line, selection.startCharacter);

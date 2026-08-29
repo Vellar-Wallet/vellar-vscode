@@ -6,7 +6,7 @@
  */
 export { detectExpressFastifyRoutes } from "./detectors/expressFastify";
 export { detectNextAppRouterRoutes, detectNextPagesRouterRoutes } from "./detectors/nextjs";
-export { computeEdits, applyEdits, findDescriptionSelection } from "./injector";
+export { computeEdits, applyEdits, findDescriptionSelection, findFirstExtensionsTodoSelection } from "./injector";
 export { validatePriceInput, DEFAULT_PRICE_USDC } from "./priceValidation";
 export { resolveServiceName } from "./serviceName";
 export { hasExistingGate, gateMarkerComment } from "./gateMarker";

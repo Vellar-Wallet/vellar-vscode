@@ -41,6 +41,12 @@ function httpsGetJson(url) {
     });
   }
   if (url.includes("/payments")) {
+    // pagination is a real field on this endpoint's response (confirmed
+    // live against the real explorer API, see dataProvider.ts's own
+    // comment) — included here, with no next page (the common single-page
+    // case), so this fixture stays representative of the real response
+    // shape DataProvider actually parses, not an older/incomplete snapshot
+    // of it.
     return Promise.resolve({
       items: [
         {
@@ -51,6 +57,7 @@ function httpsGetJson(url) {
           assetSymbol: "USDC",
         },
       ],
+      pagination: { nextCursor: null, limit: 10 },
     });
   }
   return Promise.reject(new Error(`fake-https-client: no fixture wired for ${url}`));

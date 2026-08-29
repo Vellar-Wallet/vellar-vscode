@@ -24,9 +24,14 @@ esbuild.buildSync({
   outfile: path.join(root, ".test-build", "testEntry.js"),
   external: ["vscode"],
 });
-const { detectExpressFastifyRoutes, computeEdits, applyEdits, findDescriptionSelection } = require(
-  path.join(root, ".test-build", "testEntry.js"),
-);
+const {
+  detectExpressFastifyRoutes,
+  computeEdits,
+  applyEdits,
+  findDescriptionSelection,
+  findFirstExtensionsTodoSelection,
+  hasExistingGate,
+} = require(path.join(root, ".test-build", "testEntry.js"));
 
 function assert(condition, message) {
   if (!condition) {
@@ -70,19 +75,52 @@ try {
   assert(injectedText.includes('return { forecast: "sunny", tempF: 72 };'), "original handler body is untouched");
   assert(injectedText.includes('fastify.get("/status"'), "unrelated GET /status route is untouched");
 
-  console.log("\n3b. Verifying the post-injection description selection...");
-  const selection = findDescriptionSelection(injectedText);
-  assert(Boolean(selection), "findDescriptionSelection finds the generated description line");
-  const selectedLineText = injectedText.split(/\r?\n/)[selection.line];
-  assert(selectedLineText.includes("// TODO: add the actual resource description"), "the found line is actually the description placeholder line");
-  const selectedValue = selectedLineText.slice(selection.startCharacter, selection.endCharacter);
+  console.log("\n3b. Verifying the double-injection guard...");
+  assert(!hasExistingGate(originalText, picked), "pristine file has no existing gate for GET /weather");
+  assert(hasExistingGate(injectedText, picked), "injected file is now detected as already-gated for GET /weather");
+  const otherRoute = routes.find((r) => r.routePath !== "/weather");
+  assert(Boolean(otherRoute), "found an unrelated route to check the guard against");
+  assert(!hasExistingGate(injectedText, otherRoute), "an unrelated route is not falsely detected as gated");
+
+  console.log("\n3c. Verifying the Bazaar discovery extension is generated...");
   assert(
-    selectedValue === "fastify-fresh-fixture — /weather ($0.02 USDC)",
-    `selection covers exactly the description string value, got "${selectedValue}"`,
+    injectedText.includes('import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";'),
+    "Bazaar extension imports injected",
   );
+  assert(injectedText.includes(".registerExtension(bazaarResourceServerExtension);"), "bazaarResourceServerExtension registered on the server chain");
+  assert(injectedText.includes("extensions: declareDiscoveryExtension({"), "Bazaar discovery extension declared on the route config");
+
+  console.log("\n3d. Verifying the post-injection cursor selection...");
+  // Same corrected pattern as run-acceptance-test.js: the extensions-block
+  // TODO (inside `input`) is the active post-injection cursor placement,
+  // not the description field — see EXTENSIONS_TODO_MARKER's own comment
+  // in generators/shared.ts for why.
+  const extSelection = findFirstExtensionsTodoSelection(injectedText);
+  assert(Boolean(extSelection), "findFirstExtensionsTodoSelection finds the generated extensions TODO line");
+  const injectedLines = injectedText.split(/\r?\n/);
+  const extLineText = injectedLines[extSelection.line];
   assert(
-    selectedLineText[selection.startCharacter - 1] === '"' && selectedLineText[selection.endCharacter] === '"',
-    "selection bounds sit exactly inside the surrounding quotes, not on them",
+    extLineText.includes("// TODO: example values for this endpoint's query/body"),
+    "the found line is actually the extensions input TODO placeholder line",
+  );
+  const extSelectedValue = extLineText.slice(extSelection.startCharacter, extSelection.endCharacter);
+  assert(
+    extSelectedValue === "example values for this endpoint's query/body",
+    `selection covers exactly the TODO's descriptive text, got "${extSelectedValue}"`,
+  );
+
+  // The description TODO must still be present (not removed, just no longer
+  // the auto-selected one) — checked as plain text presence, explicitly NOT
+  // as the active selection.
+  assert(
+    injectedText.includes('description: "fastify-fresh-fixture — /weather ($0.02 USDC)", // TODO: add the actual resource description'),
+    "the description TODO still exists in the generated code",
+  );
+  const descSelection = findDescriptionSelection(injectedText);
+  assert(Boolean(descSelection), "findDescriptionSelection can still find the description line (function still works, just unused post-injection)");
+  assert(
+    descSelection.line !== extSelection.line,
+    "the description selection and the active extensions-TODO selection are on different lines — the description is present but NOT the one selected",
   );
 
   console.log("\n4. Installing fixture dependencies (npm install)...");

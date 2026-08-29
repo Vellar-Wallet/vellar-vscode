@@ -39,22 +39,30 @@ body {
   border-bottom: 0;
 }
 
-/* Clip-cut marker, same corner treatment as .btn/.field elsewhere — a
-   flat-filled square, not a circle, since this system draws no curves
-   anywhere. Pending = outline only (nothing has happened yet); active = sun
-   fill (in progress, matches the design spec's "sun for the current active
-   step"); done = mint fill (matches "mint for completed steps"), with a
-   small checkmark glyph rather than relying on color alone to carry the
-   state (color-blind-safe: shape/glyph differs, not just hue). */
+/* Plain square marker — NOT the clip-cut corner treatment .btn/.field use
+   elsewhere. That corner cut (--clip-br-sm) removes a 12px diagonal, more
+   than half this marker's 22px height, and a `box-shadow` border is clipped
+   away by `clip-path` right at the cut corner (the same bug already fixed
+   on the empty-state URL input, see .test-url-input-frame below) — so at
+   this size the chip shape read as visibly broken rather than as this
+   system's intentional corner-cut motif. A real `border` (not `box-shadow`,
+   so there's nothing left for a clip-path to clip) sidesteps the whole
+   family of bugs rather than re-fighting it. Flat-filled square, not a
+   circle, since this system draws no curves anywhere. Pending = outline
+   only (nothing has happened yet); active = sun fill (in progress, matches
+   the design spec's "sun for the current active step"); done = mint fill
+   (matches "mint for completed steps"), with a small checkmark glyph rather
+   than relying on color alone to carry the state (color-blind-safe:
+   shape/glyph differs, not just hue). */
 .step-marker {
   flex: none;
   width: 22px;
   height: 22px;
   margin-top: 2px;
-  clip-path: var(--clip-br-sm);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  border: 1.5px solid var(--line-strong);
   position: relative;
+  box-sizing: border-box;
 }
 .step-marker::after {
   content: "";
@@ -98,18 +106,39 @@ body {
   margin-bottom: var(--sp-2);
 }
 
-/* A route/command example — same box-shadow-outline construction as
-   .test-url-form input in vellar-components.css, applied to a read-only
-   code block instead of a form control. */
+/* A route/command example. SAME BUG, FOUND AND FIXED, as
+   .test-url-input-frame in vellar-components.css: this used to draw its
+   border with `box-shadow: inset ...` directly on the clip-path'd element,
+   which silently clips the border away at the cut corner. Fixed with the
+   same background-as-border + inset ::before fill construction .field
+   already uses — a solid painted shape, not a shadow tracing an edge the
+   clip-path is about to cut. Unlike .test-url-input-frame (which needs a
+   separate wrapper div because a plain <input> can't host a ::before behind
+   its own text), .code-sample already wraps its content in a real child
+   element (<code>), so it can follow .field's simpler pattern directly. */
 .code-sample {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--ink);
-  background: var(--paper-tint);
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  position: relative;
+  background: var(--line-strong);
   clip-path: var(--clip-br-sm);
   padding: var(--sp-3);
   margin: 0 0 var(--sp-2);
+}
+.code-sample::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--paper-tint);
+  clip-path: var(--clip-br-sm-in1);
+}
+.code-sample > code {
+  position: relative;
+  z-index: 1;
+  display: block;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink);
   overflow-x: auto;
   white-space: pre;
 }

@@ -272,11 +272,11 @@ export class OnboardingPanel {
   </ol>
 
   <div id="completion-panel" class="completion-panel" hidden>
-    <p class="completion-message">Your endpoint will appear in the Vellar Bazaar after its first payment. Share the endpoint URL — any developer or AI agent can pay and call it.</p>
+    <p class="completion-message">Once you deploy your app and activate your endpoint, any developer or AI agent can discover and pay it.</p>
     <p class="completion-detail">
       Deploy your app, then paste your live URL into <strong>My Endpoints</strong> and click
-      <strong>"Activate endpoint"</strong> — that first payment registers it in the Bazaar and
-      makes it discoverable.
+      <strong>"Activate endpoint"</strong> to send a real test payment.
+      Your endpoint will appear in the sidebar once it settles.
     </p>
     <button class="btn" id="open-sidebar">Open the Vellar sidebar</button>
   </div>
