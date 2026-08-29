@@ -1,0 +1,79 @@
+/* ============================================================
+   Vellar design tokens, ported for the VS Code webview.
+   Source of truth: vela-wallet/apps/web/app/landing/landing.css
+   Values copied faithfully, not reinvented — see that file for the
+   full system and its own contrast/motion notes.
+
+   Two differences from the source, both deliberate, both flagged in
+   the build log rather than silently done:
+   1. Scoped to :root, not `.lp` — this webview IS the whole page,
+      there's no surrounding app shell to scope away from.
+   2. Cabinet Grotesk (the display face on vellar.xyz, loaded there from
+      the Fontshare CDN) is NOT used here — a locked decision, not a
+      placeholder: no Fontshare CDN reference exists anywhere in this
+      extension's CSP or markup, in the sidebar or the onboarding panel,
+      and none should be added. --font-display uses Plus Jakarta Sans
+      everywhere instead — the same fallback the source file itself
+      declares for exactly this case, applied permanently rather than
+      as a stand-in for Cabinet Grotesk.
+   ============================================================ */
+
+:root {
+  /* Surfaces */
+  --paper: #ffffff;
+  --paper-tint: #f5f9f6;
+  --ink: #0c3b31;
+  --forest: #13594d;
+  --line: rgba(12, 59, 49, 0.16);
+  --line-strong: rgba(12, 59, 49, 0.32);
+
+  /* Ink */
+  --ink-soft: rgba(12, 59, 49, 0.74);
+  --ink-faint: rgba(12, 59, 49, 0.55);
+
+  /* On dark */
+  --on-dark: #ffffff;
+  --on-dark-soft: rgba(255, 255, 255, 0.78);
+  --on-dark-faint: rgba(255, 255, 255, 0.55);
+  --line-dark: rgba(255, 255, 255, 0.16);
+
+  /* Accents — fills only, never body-size text on paper (matches the
+     source file's own contrast notes: ink-on-coral only passes at
+     ≥19px bold, mint/lime/sun never carry text on paper at all). */
+  --mint: #3ee6ad;
+  --mint-soft: #dcf8ec;
+  --lime: #c8f048;
+  --lime-soft: #f0f9d2;
+  --sun: #ffc94a;
+  --sun-soft: #ffefc9;
+  --coral: #ff6b5e;
+  --coral-soft: #ffe4e0;
+
+  /* Type — see the file-header note above for --font-display */
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Spacing — 8px base, unscaled (a sidebar has no viewport to clamp
+     against the way the marketing page's fluid scale does) */
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-6: 1.5rem;
+  --sp-8: 2rem;
+
+  /* Shape — no radius anywhere; 45° cuts instead, identical polygons
+     to the source file */
+  --clip-br-sm: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+  --clip-br-sm-in1: polygon(
+    1px 1px,
+    calc(100% - 1px) 1px,
+    calc(100% - 1px) calc(100% - 12.41px),
+    calc(100% - 12.41px) calc(100% - 1px),
+    1px calc(100% - 1px)
+  );
+
+  /* Motion */
+  --ease-rise: cubic-bezier(0.22, 0.95, 0.3, 1);
+  --dur-fast: 0.2s;
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Placeholder activity-bar icon: a coin/payment mark, monochrome via currentColor
+       so it themes correctly (VS Code recolors activity-bar icons itself). Swap for the
+       real Vellar mark when it's available — see the flagged decision in the build log. -->
+  <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M9 9.5c0-1.1 1.34-2 3-2s3 .9 3 2-1.34 2-3 2-3 .9-3 2 1.34 2 3 2 3-.9 3-2"
+        stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M12 6.3v1.1M12 16.6v1.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

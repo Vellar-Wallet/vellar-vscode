@@ -9,16 +9,67 @@ import { DEFAULT_PRICE_USDC, validatePriceInput } from "./priceValidation";
 import { requiredPackagesFor } from "./requiredPackages";
 import { resolveServiceName } from "./serviceName";
 import type { DetectedRoute, PaymentConfig } from "./types";
+import { DataProvider } from "./sidebar/dataProvider";
+import { VellarSidebarProvider } from "./sidebar/webviewProvider";
+import { hasCompletedOnboarding, OnboardingPanel } from "./onboarding/onboardingProvider";
 
 const SUPPORTED_LANGUAGES = new Set(["javascript", "typescript", "javascriptreact", "typescriptreact"]);
+
+// Fired once per successful addPayment injection — Step 3 of onboarding
+// listens on this, per the instruction ("the existing command already fires
+// after a successful injection — wire a completion event from there").
+// Module-level (not a class field) because addPaymentCommand() itself is a
+// plain function, not a method on anything that could hold this — a single
+// extension-lifetime emitter matches the single extension-lifetime command
+// registration it's paired with.
+const commandSuccessEmitter = new vscode.EventEmitter<void>();
 
 export function activate(context: vscode.ExtensionContext): void {
   const disposable = vscode.commands.registerCommand("vellar-x402.addPayment", () => addPaymentCommand());
   context.subscriptions.push(disposable);
+  context.subscriptions.push(commandSuccessEmitter);
+
+  // A developer who dismisses the auto-opened panel before finishing the
+  // three steps isn't locked out of it — this always opens a FRESH
+  // OnboardingPanel (never reuses a possibly-already-disposed instance from
+  // auto-open or a prior manual open), same "one instance per open" design
+  // OnboardingPanel itself already documents. Available regardless of
+  // hasCompletedOnboarding — reopening after completion is a legitimate
+  // "let me see that again" action, not an error.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vellar-x402.reopenOnboarding", () => {
+      const panel = OnboardingPanel.open(context.extensionUri, context.globalState, commandSuccessEmitter.event);
+      context.subscriptions.push(panel);
+    }),
+  );
+
+  // The DataProvider owns all polling state (currently: wallet balance) for the
+  // sidebar's lifetime — disposing it on deactivate stops every timer, so nothing
+  // keeps ticking (and nothing keeps calling Horizon) after the extension unloads.
+  const dataProvider = new DataProvider(context.globalState);
+  context.subscriptions.push(dataProvider);
+
+  const sidebarProvider = new VellarSidebarProvider(context.extensionUri, dataProvider);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(VellarSidebarProvider.viewType, sidebarProvider),
+  );
+
+  // Onboarding opens automatically ONLY on a genuine first activation — no
+  // prior globalState record of it having been completed/shown. Every
+  // subsequent activation (including ones where the developer never actually
+  // finished the three steps) leaves it closed; a developer who wants to see
+  // it again can still do so — there's no command wired for that today, but
+  // nothing here prevents adding one later, since OnboardingPanel.open() is
+  // already a plain, re-callable function, not a first-run-only code path.
+  if (!hasCompletedOnboarding(context.globalState)) {
+    const panel = OnboardingPanel.open(context.extensionUri, context.globalState, commandSuccessEmitter.event);
+    context.subscriptions.push(panel);
+  }
 }
 
 export function deactivate(): void {
-  // No background state to tear down.
+  // Disposal happens via context.subscriptions (registered in activate), which
+  // VS Code tears down automatically — nothing additional to do here.
 }
 
 async function addPaymentCommand(): Promise<void> {
@@ -75,15 +126,27 @@ async function addPaymentCommand(): Promise<void> {
   };
 
   await applyRouteInjection(editor, picked, config);
+  // Injection has now actually happened (the edit was applied) — this is the
+  // real "addPayment ran successfully" moment onboarding Step 3 listens for,
+  // fired before the (optional, secondary) dependency-install prompt below.
+  commandSuccessEmitter.fire();
   await offerDependencyInstall(editor, picked, workspaceRoot, priceUsdc);
 }
 
 /**
- * Shows the success message with an "Install dependencies" button. Clicking it
- * opens a new integrated terminal in the nearest package directory (important in
- * a monorepo — the packages must land in THAT package's package.json, not the
- * repo root's) and immediately runs the install command for whichever package
- * manager (pnpm/yarn/npm) the project actually uses, detected from its lockfile.
+ * Shows the success message with two actions: "Install dependencies"
+ * (unchanged behavior — opens a new integrated terminal in the nearest
+ * package directory and runs the install command for whichever package
+ * manager the project actually uses) and "Open Vellar sidebar" (new —
+ * reveals the activity-bar view container, same command the onboarding
+ * panel's own "Open the Vellar sidebar" button already uses).
+ *
+ * Copy change only: the message no longer echoes the install command inline
+ * (the button itself still knows what to run, from `installCommand` below —
+ * only the DISPLAYED sentence changed) and now points the developer at
+ * "activate your endpoint in the Vellar sidebar" — the first time "activate"
+ * appears in the developer-facing flow, setting up the empty state's own
+ * "Activate endpoint" language rather than introducing a new word there.
  */
 async function offerDependencyInstall(
   editor: vscode.TextEditor,
@@ -101,14 +164,17 @@ async function offerDependencyInstall(
 
   const choice = await vscode.window.showInformationMessage(
     `Vellar x402: added a $${priceUsdc} USDC payment gate to ${route.method} ${route.routePath}. ` +
-      `Review the TODOs, then install: ${installCommand}`,
+      `Deploy your app, then activate your endpoint in the Vellar sidebar to list it in the Bazaar.`,
     "Install dependencies",
+    "Open Vellar sidebar",
   );
 
   if (choice === "Install dependencies") {
     const terminal = vscode.window.createTerminal({ name: "Vellar x402: install", cwd: packageDir });
     terminal.show();
     terminal.sendText(installCommand, true); // true = run immediately, like pressing Enter
+  } else if (choice === "Open Vellar sidebar") {
+    void vscode.commands.executeCommand("workbench.view.extension.vellar-x402");
   }
 }
 

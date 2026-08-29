@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
 .test-build/**
+.github/**
 src/**
 scripts/**
 fixtures/**
@@ -10,5 +11,6 @@ esbuild.js
 tsconfig.json
 **/tsconfig.json
 **/*.ts
+**/*.map
 node_modules/**
 .git/**

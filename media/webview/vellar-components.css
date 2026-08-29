@@ -1,0 +1,323 @@
+/* Component patterns, ported from the same source as vellar-tokens.css.
+   Scoped to what Step 1 (Wallet) needs: the eyebrow label, the button, and
+   the field/stat card (`.lp-field` in the source — its `.lbl`/`.amt`/`.sub`
+   shape is exactly the label/value/sub-line pattern a balance row needs).
+   The larger offset-frame card system (used for bigger listing cards) isn't
+   ported yet — nothing in Step 1 needs it; it'll come in when a later
+   section does, rather than pulled in unused now. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  padding: var(--sp-4);
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  margin: 0 0 var(--sp-3);
+}
+
+/* The clip-cut bordered field, built the same way the source does it: a
+   colored background painted to the OUTER polygon acts as a pixel-exact
+   1px border, and a ::before clipped to the 1px-inset polygon paints the
+   real fill on top — no border-radius, no box-shadow, anywhere. */
+.field {
+  position: relative;
+  background: var(--field-border, var(--line));
+  clip-path: var(--clip-br-sm);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+.field::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--field-fill, var(--paper-tint));
+  clip-path: var(--clip-br-sm-in1);
+}
+.field > * {
+  position: relative;
+  z-index: 1;
+}
+
+.field .lbl {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.field .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: 2px;
+}
+.field .amt {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.field .amt--lg {
+  font-size: 22px;
+}
+.field .amt--sm {
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.field .sub {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-top: 4px;
+  font-family: var(--font-mono);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.55em 1em;
+  border: 0;
+  clip-path: var(--clip-br-sm);
+  cursor: pointer;
+  text-decoration: none;
+  background: transparent;
+  color: var(--ink);
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.btn:active {
+  translate: 0 1px;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Quiet outline variant — used for "Copy" and "Open Settings", actions
+   that shouldn't compete with a primary action there isn't one of yet. */
+.btn--outline {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  clip-path: none;
+}
+.btn--outline:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.empty-state {
+  color: var(--ink-faint);
+  font-size: 12px;
+  padding: var(--sp-4) 0;
+}
+
+/* First text <input> in this design system — same offset-outline "frame"
+   depth device as .field (a solid-color background painted to the OUTER
+   polygon acts as a pixel-exact border, an inset fill sits on top), just
+   applied to a real form control instead of a read-only value display. */
+.test-url-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.test-url-form input {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--paper-tint);
+  border: 0;
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  clip-path: var(--clip-br-sm);
+  padding: 0.6em 0.8em;
+  outline: none;
+}
+.test-url-form input::placeholder {
+  color: var(--ink-faint);
+}
+.test-url-form input:focus-visible {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+.test-url-form .btn {
+  align-self: flex-start;
+}
+
+/* Ownership-state badge. Fills only, per the source system's own contrast
+   rule (mint/lime/sun never carry text on paper) — ink text sits ON the
+   accent fill here, which is the one place those colors DO carry text
+   legibly (measured in landing.css's own header: ink on mint 7.6, ink on
+   sun 7.9; both pass comfortably at this badge's weight/size). Coral is
+   the one accent the source flags as only safe at ≥19px bold — this badge
+   is smaller than that, so unverified's coral badge uses coral-soft as the
+   fill with full-strength coral as the text color instead of the reverse,
+   keeping contrast on the safe side rather than reusing the mint/sun
+   pattern blindly for the one accent with a stated exception. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.3em 0.7em;
+  clip-path: var(--clip-br-sm);
+}
+.badge--verified {
+  background: var(--mint);
+  color: var(--ink);
+}
+.badge--proven-unconfirmed {
+  background: var(--sun);
+  color: var(--ink);
+}
+.badge--unverified {
+  background: var(--coral-soft);
+  color: var(--coral);
+}
+.badge--unknown {
+  background: var(--line);
+  color: var(--ink-faint);
+}
+
+.endpoint-card {
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+.endpoint-card:last-child {
+  border-bottom: 0;
+}
+.endpoint-card .resource-link {
+  color: var(--ink);
+  text-decoration: none;
+  word-break: break-all;
+}
+.endpoint-card .resource-link:hover {
+  color: var(--forest);
+  text-decoration: underline;
+}
+.endpoint-card .meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--sp-2);
+  gap: var(--sp-2);
+}
+.endpoint-card .stats-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--sp-2);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.endpoint-card .price {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.empty-state .btn {
+  margin-top: var(--sp-3);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Recent Settlements row. Deliberately no badge/button — a settlement is a past
+   fact, not something with an ownership state or an action to take on it, so it
+   doesn't reuse .endpoint-card's shape wholesale even though it lives in the same
+   list-of-rows-with-a-bottom-rule family. */
+.settlement-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.settlement-row:last-child {
+  border-bottom: 0;
+}
+.settlement-row .settlement-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settlement-row .settlement-amount {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--ink);
+}
+.settlement-row .settlement-payer {
+  color: var(--ink-faint);
+}
+.settlement-row .settlement-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+}
+.settlement-row .settlement-time {
+  color: var(--ink-faint);
+}
+.settlement-row .settlement-tx-link {
+  font-family: var(--font-mono);
+  color: var(--forest);
+  text-decoration: none;
+}
+.settlement-row .settlement-tx-link:hover {
+  text-decoration: underline;
+}
+
+/* Earnings Summary's four .field stat cards, 2-up rather than the single-column
+   stack Wallet uses — four numbers read better side by side than a tall list,
+   and .field itself (border/fill/lbl/amt) is reused completely unchanged. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+.stat-grid .field {
+  margin-bottom: 0;
+}
+
+/* The "only the last 10" honesty note — deliberately styled like .empty-state
+   (same faint ink, same small size) rather than looking like a normal label:
+   it's a caveat about the numbers above it, not a fifth stat. */
+.earnings-note {
+  color: var(--ink-faint);
+  font-size: 11px;
+  margin-top: var(--sp-2);
+}

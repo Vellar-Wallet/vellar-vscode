@@ -1,0 +1,173 @@
+/* Onboarding panel — layout + step-marker states. Reuses vellar-tokens.css's
+   colors/spacing/clip-path and vellar-components.css's .btn/.btn--outline/
+   .eyebrow unchanged; this file adds only what's new here: the step-list
+   marker states (pending/active/done) and the completion panel. */
+
+body {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--sp-8) var(--sp-4);
+}
+
+.onboarding-title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--sp-2);
+}
+
+.onboarding-sub {
+  color: var(--ink-soft);
+  margin: 0 0 var(--sp-6);
+}
+
+.step-list {
+  list-style: none;
+  margin: 0 0 var(--sp-6);
+  padding: 0;
+}
+
+.step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+.step-item:last-child {
+  border-bottom: 0;
+}
+
+/* Clip-cut marker, same corner treatment as .btn/.field elsewhere — a
+   flat-filled square, not a circle, since this system draws no curves
+   anywhere. Pending = outline only (nothing has happened yet); active = sun
+   fill (in progress, matches the design spec's "sun for the current active
+   step"); done = mint fill (matches "mint for completed steps"), with a
+   small checkmark glyph rather than relying on color alone to carry the
+   state (color-blind-safe: shape/glyph differs, not just hue). */
+.step-marker {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  clip-path: var(--clip-br-sm);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  position: relative;
+}
+.step-marker::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.step-item--active .step-marker {
+  background: var(--sun);
+  box-shadow: none;
+}
+.step-item--done .step-marker {
+  background: var(--mint);
+  box-shadow: none;
+}
+.step-item--done .step-marker::after {
+  content: "✓";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.step-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.step-item--active .step-title {
+  color: var(--ink);
+}
+.step-item:not(.step-item--active):not(.step-item--done) .step-title {
+  color: var(--ink-soft);
+}
+
+.step-explainer {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: var(--sp-2);
+}
+
+/* A route/command example — same box-shadow-outline construction as
+   .test-url-form input in vellar-components.css, applied to a read-only
+   code block instead of a form control. */
+.code-sample {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper-tint);
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  clip-path: var(--clip-br-sm);
+  padding: var(--sp-3);
+  margin: 0 0 var(--sp-2);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.command-sample {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--sun-soft);
+  clip-path: var(--clip-br-sm);
+  padding: 0.4em 0.7em;
+  margin-bottom: var(--sp-2);
+}
+
+.step-detail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.step-status-text {
+  font-size: 12px;
+}
+
+/* Completion panel — a mint-tinted field, same offset-fill construction as
+   .field elsewhere, so the "you're done" state visually reads as a
+   celebratory version of the same card pattern rather than a new shape. */
+.completion-panel {
+  position: relative;
+  background: var(--mint);
+  clip-path: var(--clip-br-sm);
+  padding: var(--sp-6);
+}
+.completion-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--mint-soft);
+  clip-path: var(--clip-br-sm-in1);
+}
+.completion-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.completion-message {
+  margin: 0 0 var(--sp-3);
+  color: var(--ink);
+  line-height: 1.5;
+  font-weight: 700;
+}
+
+.completion-detail {
+  margin: 0 0 var(--sp-4);
+  color: var(--ink-soft);
+  line-height: 1.5;
+  font-size: 13px;
+}

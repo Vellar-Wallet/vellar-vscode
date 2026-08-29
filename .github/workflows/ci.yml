@@ -1,11 +1,24 @@
 name: CI
 
-# Runs the same five verification scripts a human runs by hand today (see
+# Runs the acceptance/regression scripts a human runs by hand today (see
 # README's "Acceptance test" section), so a future change can't silently break
-# one of them without anyone noticing. Deliberately vscode-free — no
-# @vscode/test-electron, no extension host — the scripts exercise
-# src/detectors, src/injector, and src/generators directly, exactly the scope
-# these scripts were built for.
+# one of them without anyone noticing.
+#
+# Three groups, all still no @vscode/test-electron and no real extension host:
+#  - The original five exercise src/detectors, src/injector, and
+#    src/generators directly — genuinely vscode-free, no fake module needed
+#    at all.
+#  - Two (the sidebar's postMessage-leak audit and the test-payment assertion
+#    check) exercise code that DOES import "vscode" throughout
+#    (dataProvider.ts, webviewProvider.ts, runTestPayment.ts) — those run
+#    against scripts/vscode-test-stub.js, a small fake of the surface those
+#    modules actually call, substituted at bundle time via esbuild.
+#  - One (the Horizon timeout regression check) exercises usdc.ts, which has
+#    NO vscode import at all — no stub needed there either, just a plain
+#    esbuild bundle with vscode marked external (a no-op, since it's never
+#    actually imported).
+# No live network call anywhere in any of the newer checks (see their own
+# file-header comments for the fixture/fake modules that make that true).
 
 on:
   push:
@@ -55,6 +68,13 @@ jobs:
       - name: Compile
         run: npm run compile
 
+      # Fast (<1s), no fixtures needed — runs first so a Horizon-hang
+      # regression (see scripts/run-horizon-timeout-check.js's own header
+      # comment for the real production bug this guards against) fails
+      # quickly rather than after the slower fixture-based checks below.
+      - name: Run Horizon timeout regression check
+        run: node scripts/run-horizon-timeout-check.js
+
       - name: Run acceptance test (Express)
         run: node scripts/run-acceptance-test.js
 
@@ -72,3 +92,12 @@ jobs:
       # using the real file rather than a path that would fail on first push.
       - name: Run multi-line import regression check
         run: node scripts/run-fastify-multiline-import-check.js
+
+      - name: Typecheck (main + scripts)
+        run: npm run typecheck
+
+      - name: Run sidebar postMessage leak check
+        run: node scripts/run-postmessage-leak-check.js
+
+      - name: Run test-payment assertion check
+        run: node scripts/run-testpayment-assertion-check.js

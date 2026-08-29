@@ -2,7 +2,7 @@
   "name": "vellar-x402",
   "displayName": "Vellar x402",
   "description": "Add x402 payment gating to an HTTP endpoint in one command.",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "publisher": "VellarWallet",
   "license": "MIT",
   "icon": "icon.png",
@@ -34,6 +34,10 @@
       {
         "command": "vellar-x402.addPayment",
         "title": "Vellar: Add x402 payment to this endpoint"
+      },
+      {
+        "command": "vellar-x402.reopenOnboarding",
+        "title": "Vellar: Reopen getting started"
       }
     ],
     "configuration": {
@@ -43,15 +47,38 @@
           "type": "string",
           "default": "",
           "description": "Your Stellar G-address where USDC x402 payments should land."
+        },
+        "vellar-x402.notifyOnEveryPayment": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a notification for every incoming payment, in addition to the first-payment and verification notifications shown by default."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vellar-x402",
+          "title": "Vellar x402",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vellar-x402": [
+        {
+          "type": "webview",
+          "id": "vellar-x402.sidebar",
+          "name": "Vellar"
+        }
+      ]
     }
   },
   "scripts": {
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "node esbuild.js --production",
-    "typecheck": "tsc --noEmit -p ./",
+    "typecheck": "tsc --noEmit -p ./ && tsc --noEmit -p ./scripts",
     "pretest": "npm run compile && npm run typecheck",
     "vscode:prepublish": "npm run package",
     "vsce-package": "npm run package && vsce package"
@@ -62,5 +89,9 @@
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "@x402/core": "^2.24.0",
+    "@x402/stellar": "^2.24.0"
   }
 }

@@ -166,10 +166,20 @@ node scripts/run-package-manager-check.js                # pnpm/yarn/npm detecti
 Each script resets its fixture's git-tracked source back to its pristine,
 un-injected state after running, so the fixtures stay reusable.
 
-## What slice one deliberately does not do
+## Vellar sidebar
 
-Per scope: no sidebar panel, no test runner, no wallet view. Only the one command
-and code generation described above. See the two deviations from the original
-spec noted above (Pages Router, Bazaar metadata) — both are scope adjustments made
-after finding the real `@x402/*` package APIs didn't support what a naive reading
-of the spec would generate, not omissions.
+Since 0.2.0, the extension also adds a **Vellar** view to the activity bar: your
+wallet balance, every endpoint you're the payTo for (with a real **Test** button
+that fires a genuine throwaway-wallet testnet payment), your recent settlements,
+and an earnings summary — plus a first-run onboarding panel that walks through
+getting your first endpoint set up. See [CHANGELOG.md](CHANGELOG.md#020) for the
+full list of what's in it.
+
+## What the add-payment command deliberately does not do
+
+Per scope: `vellar-x402.addPayment` (described above) is code generation and
+nothing else — no test runner, no deployment, no wallet management of its own.
+See the two deviations from the original spec noted above (Pages Router, Bazaar
+metadata) — both are scope adjustments made after finding the real `@x402/*`
+package APIs didn't support what a naive reading of the spec would generate, not
+omissions.
