@@ -2,6 +2,14 @@
 
 All notable changes to the Vellar x402 extension are documented here.
 
+## 0.2.1
+
+Cosmetic-only patch release.
+
+- Replaced the activity-bar sidebar icon (`media/activity-icon.svg`, a
+  placeholder $-in-circle mark) with the real Vellar "V" mark
+  (`media/icon.png`). The old placeholder SVG has been removed.
+
 ## 0.2.0
 
 A minor version bump, not a patch — this release adds an entire second
