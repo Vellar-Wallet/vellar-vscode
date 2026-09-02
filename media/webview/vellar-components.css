@@ -92,6 +92,22 @@ body {
   font-family: var(--font-mono);
 }
 
+/* Amber precondition notice (missing trustline / unfunded account) — reuses
+   .field's own clip-cut shape via its --field-border/--field-fill override
+   hooks, tinted with the existing --sun tokens rather than --coral: this is
+   something the developer hasn't done yet, not something that's broken. */
+.field--warning {
+  --field-border: var(--sun);
+  --field-fill: var(--sun-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.field--warning a {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

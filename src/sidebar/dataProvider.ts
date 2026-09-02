@@ -50,7 +50,8 @@ const SETTLEMENTS_LIMIT = 10;
 export type WalletBalanceState =
   | { kind: "unconfigured" }
   | { kind: "invalid-address" }
-  | { kind: "loaded"; address: string; usdc: string; xlm: string };
+  | { kind: "unfunded"; address: string }
+  | { kind: "loaded"; address: string; usdc: string; xlm: string; hasTrustline: boolean };
 
 interface HorizonBalance {
   asset_type: string;
@@ -346,25 +347,34 @@ export class DataProvider implements vscode.Disposable {
 
     // Horizon 404s an account that has never been funded on testnet — a real,
     // common case (a freshly generated address before its first friendbot call),
-    // not a fault. Treated as zero balances rather than routed through the
-    // generic error path, since it isn't an error, it's an accurate answer.
+    // not a fault. Surfaced as its own "unfunded" state (rather than a fake
+    // zero-balance "loaded" result) so the sidebar can tell the developer what
+    // they're actually looking at: an account that can't hold ANY balance yet,
+    // XLM or USDC, as opposed to a funded account that simply has no trustline
+    // (a materially different fix: send XLM, vs. open a trustline).
     let account: HorizonAccountResponse;
     try {
       account = await httpsGetJson<HorizonAccountResponse>(
         `${HORIZON_TESTNET}/accounts/${encodeURIComponent(address)}`,
       );
     } catch (err) {
-      if (isNotFound(err)) return { kind: "loaded", address, usdc: "0.00", xlm: "0.00" };
+      if (isNotFound(err)) return { kind: "unfunded", address };
       throw err;
     }
 
     const xlm = account.balances.find((b) => b.asset_type === "native")?.balance ?? "0";
-    const usdc =
-      account.balances.find(
-        (b) => b.asset_code === USDC_CODE && b.asset_issuer === USDC_ISSUER,
-      )?.balance ?? "0";
+    const usdcBalance = account.balances.find(
+      (b) => b.asset_code === USDC_CODE && b.asset_issuer === USDC_ISSUER,
+    );
+    // A trustline is the balances[] entry itself existing — an account with no
+    // USDC trustline has no such entry at all (not an entry with balance "0"),
+    // so this checks presence, not the balance value. Matched by asset_code AND
+    // asset_issuer together, same rule as the balance lookup right above: code
+    // alone proves nothing, anyone can issue a token also called "USDC".
+    const hasTrustline = usdcBalance !== undefined;
+    const usdc = usdcBalance?.balance ?? "0";
 
-    return { kind: "loaded", address, usdc, xlm };
+    return { kind: "loaded", address, usdc, xlm, hasTrustline };
   }
 
   private async fetchEndpoints(): Promise<EndpointsState> {

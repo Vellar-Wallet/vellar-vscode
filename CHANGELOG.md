@@ -2,6 +2,29 @@
 
 All notable changes to the Vellar x402 extension are documented here.
 
+## 0.2.2
+
+### Fixed: the Wallet panel couldn't distinguish "no USDC trustline" from "unfunded" from "genuinely zero balance"
+
+Both an unfunded address and a funded address with no USDC trustline
+previously showed the same "0.00 USDC" — indistinguishable from a funded,
+trustlined account that simply hasn't been paid yet. A developer with either
+of the first two problems had no signal from the sidebar that payments to
+their `payToAddress` would fail on-chain.
+
+- `dataProvider.ts`'s wallet fetch now reports three distinct states:
+  unconfigured/invalid-address (unchanged), a new `unfunded` state for an
+  address Horizon 404s, and `loaded` with a new `hasTrustline` flag (true
+  only when the account's balances actually include a USDC trustline entry
+  for the canonical testnet USDC issuer — not inferred from balance, since a
+  trustline can exist with a zero balance).
+- The Wallet panel shows an amber (not red — this is a precondition, not an
+  error) warning below the balance when `hasTrustline` is false, linking to
+  Freighter and Stellar Laboratory to open one, and a separate "not yet
+  funded" message when the address doesn't exist on Stellar at all.
+- Documented in the README under a new "Before you start: open a USDC
+  trustline" section.
+
 ## 0.2.1
 
 Cosmetic-only patch release.

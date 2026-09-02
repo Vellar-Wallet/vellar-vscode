@@ -102,6 +102,22 @@ The address is read once and inlined into the generated code (`PAYMENT_CONFIG.pa
 rather than read from settings at runtime. If you change your payTo address after
 generating a gate, re-run the command on that route to update the inlined address.
 
+### Before you start: open a USDC trustline
+
+Your payout address (`payToAddress`) must have a USDC trustline open on Stellar
+before you can receive payments. Without it, payments will fail on-chain even
+if everything else is configured correctly.
+
+To open a trustline:
+
+- **Freighter**: Settings → Assets → Add asset → USDC
+- **Stellar Laboratory**: https://laboratory.stellar.org
+- Any Stellar wallet that supports custom assets
+
+This is a one-time setup step per wallet address. The Vellar sidebar's Wallet
+panel checks for this and shows a warning if your configured address is missing
+a trustline (or isn't funded yet at all) — see [Vellar sidebar](#vellar-sidebar).
+
 ## Use it
 
 1. Open a `.js`, `.ts`, `.mjs` file with an Express, Fastify, or Next.js route in it.
@@ -174,6 +190,12 @@ that fires a genuine throwaway-wallet testnet payment), your recent settlements,
 and an earnings summary — plus a first-run onboarding panel that walks through
 getting your first endpoint set up. See [CHANGELOG.md](CHANGELOG.md#020) for the
 full list of what's in it.
+
+The Wallet panel also flags the two states that otherwise both look like "0.00
+USDC" and leave you guessing why: an amber notice if your configured address is
+funded but has no USDC trustline yet (see
+[Before you start](#before-you-start-open-a-usdc-trustline)), and a separate
+notice if the address isn't funded on Stellar at all.
 
 ## What the add-payment command deliberately does not do
 

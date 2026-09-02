@@ -542,6 +542,33 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
+    if (data.kind === "unfunded") {
+      root.innerHTML = \`
+        <div class="field">
+          <div class="lbl">Payout address</div>
+          <div class="sub"><span class="mono">\${escapeHtml(data.truncatedAddress)}</span></div>
+        </div>
+        <div class="field field--warning">
+          This address is not yet funded on Stellar. Fund it with XLM first, then open a USDC trustline.
+        </div>
+      \`;
+      return;
+    }
+
+    // Amber, not red (--coral): a missing trustline is a precondition the
+    // developer hasn't completed yet, not an error state — they can still use
+    // every other part of the extension, they just can't receive USDC until
+    // this is done. Reuses .field's own clip-cut shape via the
+    // --field-border/--field-fill override hooks it already exposes, rather
+    // than inventing a second box style for what's still fundamentally a
+    // labeled info card.
+    const trustlineWarning = data.hasTrustline
+      ? ""
+      : \`<div class="field field--warning">
+          Your wallet has no USDC trustline. Payments to this address will fail on-chain.
+          Open a trustline first in <a href="https://freighter.app" target="_blank" rel="noreferrer">Freighter</a>
+          or <a href="https://laboratory.stellar.org" target="_blank" rel="noreferrer">Stellar Laboratory</a>.
+        </div>\`;
 
     root.innerHTML = \`
       <div class="field">
@@ -558,6 +585,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           <button class="btn btn--outline" id="copy-address">Copy</button>
         </div>
       </div>
+      \${trustlineWarning}
     \`;
     document.getElementById("copy-address").addEventListener("click", () => {
       vscode.postMessage({ type: "copyAddress" });
@@ -883,11 +911,21 @@ export function toWalletDisplayState(
 ): import("./polling").PollResult<
   | { kind: "unconfigured" }
   | { kind: "invalid-address" }
-  | { kind: "loaded"; usdcDisplay: string; xlmDisplay: string; truncatedAddress: string }
+  | { kind: "unfunded"; truncatedAddress: string }
+  | {
+      kind: "loaded";
+      usdcDisplay: string;
+      xlmDisplay: string;
+      truncatedAddress: string;
+      hasTrustline: boolean;
+    }
 > {
   if (state.status !== "ok") return state;
   const data = state.data;
-  if (data.kind !== "loaded") return { status: "ok", data };
+  if (data.kind === "unconfigured" || data.kind === "invalid-address") return { status: "ok", data };
+  if (data.kind === "unfunded") {
+    return { status: "ok", data: { kind: "unfunded", truncatedAddress: truncateMiddle(data.address) } };
+  }
   return {
     status: "ok",
     data: {
@@ -897,6 +935,7 @@ export function toWalletDisplayState(
       usdcDisplay: `${formatDecimalAmount(data.usdc)} USDC`,
       xlmDisplay: `${formatDecimalAmount(data.xlm)} XLM`,
       truncatedAddress: truncateMiddle(data.address),
+      hasTrustline: data.hasTrustline,
     },
   };
 }
