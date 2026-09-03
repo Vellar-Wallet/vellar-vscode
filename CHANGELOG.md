@@ -2,6 +2,43 @@
 
 All notable changes to the Vellar x402 extension are documented here.
 
+## 0.2.3
+
+### Fixed: 0.2.2's trustline warning was invisible, sections had no breathing room, and the panel didn't fill its own height
+
+Follow-up fixes found by actually looking at 0.2.2 running in the sidebar,
+not just at the diff:
+
+- The trustline/unfunded warning text added in 0.2.2 rendered completely
+  invisible — only its two links ("Freighter", "Stellar Laboratory") showed.
+  `.field`'s CSS only promotes element children above its `::before` fill
+  layer via z-index; the warning sentence was a bare text node with no
+  element to promote, so it sat underneath the opaque background. Fixed by
+  wrapping it in a `<p class="warning-text">`, plus restoring the amber
+  `--field-border`/`--field-fill` tokens the same edit had accidentally
+  dropped, and adding a proper label/spacing so it reads as a structured
+  warning card.
+- The gap between sidebar sections (Wallet / My Endpoints / Recent
+  Settlements / Earnings Summary) was implemented as a top margin on the
+  *next* section's heading, so it only existed if the *previous* section's
+  last element happened to carry its own bottom margin. A section ending in
+  a bare button (e.g. My Endpoints' "Activate endpoint") had no such margin
+  and visually ran straight into the next heading. Fixed by wrapping each
+  heading+content pair in a `<section class="sidebar-section">` and giving
+  the section itself a guaranteed top margin from its predecessor —
+  unconditional, regardless of what the previous section last rendered.
+- Added responsive handling where there was none: `flex-wrap` on every
+  two-sided row that assumed enough horizontal room (endpoint meta/stats
+  rows, the payout-address-plus-Copy row, the settlements pager), ellipsis
+  truncation on settlement amounts/payers instead of silent clipping, and a
+  container query that collapses Earnings Summary's 2-column stat grid to
+  one column once the sidebar is dragged narrow.
+- The sidebar's white background stopped wherever its content ended,
+  leaving VS Code's dark default background showing below it whenever the
+  panel had little content (e.g. before any endpoints exist). Fixed with
+  `html { height: 100% }` / `body { min-height: 100% }` so the paper
+  background always fills the full panel height.
+
 ## 0.2.2
 
 ### Fixed: the Wallet panel couldn't distinguish "no USDC trustline" from "unfunded" from "genuinely zero balance"

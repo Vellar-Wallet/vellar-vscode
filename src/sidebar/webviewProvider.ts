@@ -492,22 +492,30 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
 <link rel="stylesheet" href="${componentsUri}" />
 </head>
 <body>
-<div class="eyebrow">Wallet</div>
-<div id="wallet-root">
-  <div class="empty-state">Loading…</div>
-</div>
-<div class="eyebrow" style="margin-top: var(--sp-6);">My Endpoints</div>
-<div id="endpoints-root">
-  <div class="empty-state">Loading…</div>
-</div>
-<div class="eyebrow" style="margin-top: var(--sp-6);">Recent Settlements</div>
-<div id="settlements-root">
-  <div class="empty-state">Loading…</div>
-</div>
-<div class="eyebrow" style="margin-top: var(--sp-6);">Earnings Summary</div>
-<div id="earnings-root">
-  <div class="empty-state">Loading…</div>
-</div>
+<section class="sidebar-section">
+  <div class="eyebrow">Wallet</div>
+  <div id="wallet-root">
+    <div class="empty-state">Loading…</div>
+  </div>
+</section>
+<section class="sidebar-section">
+  <div class="eyebrow">My Endpoints</div>
+  <div id="endpoints-root">
+    <div class="empty-state">Loading…</div>
+  </div>
+</section>
+<section class="sidebar-section">
+  <div class="eyebrow">Recent Settlements</div>
+  <div id="settlements-root">
+    <div class="empty-state">Loading…</div>
+  </div>
+</section>
+<section class="sidebar-section">
+  <div class="eyebrow">Earnings Summary</div>
+  <div id="earnings-root">
+    <div class="empty-state">Loading…</div>
+  </div>
+</section>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const root = document.getElementById("wallet-root");
@@ -549,7 +557,8 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           <div class="sub"><span class="mono">\${escapeHtml(data.truncatedAddress)}</span></div>
         </div>
         <div class="field field--warning">
-          This address is not yet funded on Stellar. Fund it with XLM first, then open a USDC trustline.
+          <div class="lbl">Not funded yet</div>
+          <p class="warning-text">This address is not yet funded on Stellar. Fund it with XLM first, then open a USDC trustline.</p>
         </div>
       \`;
       return;
@@ -562,12 +571,21 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     // --field-border/--field-fill override hooks it already exposes, rather
     // than inventing a second box style for what's still fundamentally a
     // labeled info card.
+    //
+    // REAL BUG, FOUND AND FIXED: the message used to be a bare text node
+    // directly inside .field--warning. .field's own CSS only promotes
+    // element children (the .field > * rule) above the ::before fill layer
+    // via z-index — a raw text node has no box to promote, so it rendered
+    // underneath the opaque fill and was completely invisible (only the two
+    // <a> links, which ARE elements, showed up). Wrapping the sentence in a
+    // <p> gives it the same element-level promotion the links already had.
     const trustlineWarning = data.hasTrustline
       ? ""
       : \`<div class="field field--warning">
-          Your wallet has no USDC trustline. Payments to this address will fail on-chain.
+          <div class="lbl">No USDC trustline</div>
+          <p class="warning-text">Your wallet has no USDC trustline. Payments to this address will fail on-chain.
           Open a trustline first in <a href="https://freighter.app" target="_blank" rel="noreferrer">Freighter</a>
-          or <a href="https://laboratory.stellar.org" target="_blank" rel="noreferrer">Stellar Laboratory</a>.
+          or <a href="https://laboratory.stellar.org" target="_blank" rel="noreferrer">Stellar Laboratory</a>.</p>
         </div>\`;
 
     root.innerHTML = \`

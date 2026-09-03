@@ -10,7 +10,18 @@
   box-sizing: border-box;
 }
 
+/* html/body must span the FULL viewport height, not just their own content's
+   height — otherwise, whenever the sidebar's content is shorter than the
+   view (e.g. the empty/early-state screenshot this was caught from), body's
+   own background only paints behind its short content box and the rest of
+   the panel falls through to VS Code's default (dark) webview background
+   instead of staying paper-white all the way down. */
+html {
+  height: 100%;
+}
+
 body {
+  min-height: 100%;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-body);
@@ -18,6 +29,26 @@ body {
   line-height: 1.5;
   margin: 0;
   padding: var(--sp-4);
+  /* Lets .stat-grid (and anything else in a later section) query THIS box's
+     own width rather than the viewport's — see .stat-grid's own comment for
+     why a container query, not a media query, is the right primitive for a
+     panel that can be dragged narrower/wider as its own box, independent of
+     the window/display it's embedded in. */
+  container-type: inline-size;
+}
+
+/* One section = one eyebrow + its content root. The gap between sections
+   lives HERE, as a symmetric margin on the section itself, rather than as a
+   margin-top on the next eyebrow (the previous shape — see git history):
+   that made the gap depend entirely on what the PREVIOUS section's last
+   child happened to be (a button has no bottom margin of its own, so a
+   section ending in one, e.g. My Endpoints' "Activate endpoint", visually
+   crashed into the eyebrow below it with no breathing room at all). A
+   margin on .sidebar-section itself is unconditional — it doesn't care what
+   the section is showing (loading/empty/populated/a trailing button), so
+   the gap is the same every time. */
+.sidebar-section + .sidebar-section {
+  margin-top: var(--sp-6);
 }
 
 .eyebrow {
@@ -84,8 +115,10 @@ body {
 }
 .field .sub {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: var(--sp-2);
   font-size: 11px;
   color: var(--ink-faint);
   margin-top: 4px;
@@ -95,17 +128,29 @@ body {
 /* Amber precondition notice (missing trustline / unfunded account) — reuses
    .field's own clip-cut shape via its --field-border/--field-fill override
    hooks, tinted with the existing --sun tokens rather than --coral: this is
-   something the developer hasn't done yet, not something that's broken. */
+   something the developer hasn't done yet, not something that's broken.
+   The message itself lives in a real child element (.warning-text, a <p>),
+   not a bare text node — .field > * only promotes ELEMENT children above
+   the ::before fill layer, so a bare text node here would render invisibly
+   underneath it (a real bug this shape once had, see webviewProvider.ts). */
 .field--warning {
   --field-border: var(--sun);
   --field-fill: var(--sun-soft);
+  padding-bottom: var(--sp-4);
+}
+.field--warning .lbl {
+  color: var(--forest);
+}
+.field--warning .warning-text {
+  margin: var(--sp-2) 0 0;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: var(--ink);
 }
 .field--warning a {
   color: var(--ink);
   font-weight: 700;
+  text-decoration-color: var(--ink-faint);
 }
 
 .btn {
@@ -304,6 +349,7 @@ body {
 }
 .endpoint-card .meta-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   margin-top: var(--sp-2);
@@ -311,6 +357,7 @@ body {
 }
 .endpoint-card .stats-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   margin-top: var(--sp-2);
@@ -351,6 +398,15 @@ body {
   gap: 2px;
   min-width: 0;
 }
+.settlement-row .settlement-amount,
+.settlement-row .settlement-payer {
+  /* min-width: 0 on the flex parent lets these shrink below their content
+     size at a narrow sidebar width — without an explicit ellipsis here,
+     that shrinking clips the text with no visual cue it was cut off. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settlement-row .settlement-amount {
   font-family: var(--font-mono);
   font-weight: 700;
@@ -385,6 +441,7 @@ body {
    row in the same list rather than a separate control bolted on below it. */
 .settlements-pager {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
@@ -399,7 +456,14 @@ body {
 
 /* Earnings Summary's four .field stat cards, 2-up rather than the single-column
    stack Wallet uses — four numbers read better side by side than a tall list,
-   and .field itself (border/fill/lbl/amt) is reused completely unchanged. */
+   and .field itself (border/fill/lbl/amt) is reused completely unchanged.
+   2-up assumes each card has enough room for its .lbl/.amt to sit on one
+   line without cramping — true for a typical sidebar width, but the VS Code
+   sidebar is user-resizable and can be dragged much narrower. A container
+   query (querying THIS BOX's own width, via body's container-type set
+   above, not the viewport's) drops to a single column once there's
+   genuinely not enough room for two, rather than letting two columns
+   squeeze indefinitely. */
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -407,6 +471,11 @@ body {
 }
 .stat-grid .field {
   margin-bottom: 0;
+}
+@container (max-width: 260px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* The "only the last 10" honesty note — deliberately styled like .empty-state
