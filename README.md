@@ -1,3 +1,6 @@
+<img width="5410" height="2088" alt="Full Logo White" src="https://github.com/user-attachments/assets/1fedbfdd-274e-412f-ae83-ebeb5c27a92f" />
+
+
 # Vellar x402
 
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/VellarWallet.vellar-x402?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=VellarWallet.vellar-x402)
