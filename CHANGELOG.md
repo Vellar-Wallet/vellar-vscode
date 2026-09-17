@@ -2,6 +2,23 @@
 
 All notable changes to the Vellar x402 extension are documented here.
 
+## 0.3.0
+
+### Added: mainnet (stellar:pubnet) support, now that the Vellar facilitator is live on mainnet
+
+- New `vellar-x402.network` setting (`stellar:testnet` or `stellar:pubnet`),
+  defaulting to `stellar:pubnet`. Drives both the in-editor test-payment flow
+  and generated x402 boilerplate, which previously always targeted
+  `stellar:testnet` regardless of the developer's own facilitator setup.
+- Wallet balances, endpoint price labels, and the test-payment DEX flow now
+  resolve the correct network's USDC issuer and Horizon endpoint, instead of
+  only ever matching testnet USDC.
+- Test payments explicitly refuse to run on `stellar:pubnet` for now:
+  friendbot (the funding step) has no mainnet equivalent, so the flow fails
+  fast with a clear message rather than a confusing network error.
+- Generated boilerplate bakes the resolved network in as a literal at
+  generation time, same as the payout address.
+
 ## 0.2.3
 
 ### Fixed: 0.2.2's trustline warning was invisible, sections had no breathing room, and the panel didn't fill its own height
