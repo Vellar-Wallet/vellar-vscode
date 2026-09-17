@@ -74,6 +74,7 @@ try {
   const config = {
     priceUsdc: "0.05",
     payToAddress: "GA123456789EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXX",
+    network: "stellar:testnet",
     endpointUrl: "/weather",
     serviceName: "express-fresh-fixture",
   };
@@ -100,8 +101,17 @@ try {
   assert(injectedText.includes("https://vellar-facilitator.onrender.com"), "facilitator URL injected");
   assert(injectedText.includes(config.payToAddress), "payToAddress injected");
   assert(injectedText.includes('price: "$0.05"'), "price injected as dollar-string");
-  assert(injectedText.includes('"stellar:testnet" as const'), "network injected with literal type preserved");
+  assert(injectedText.includes('.register("stellar:testnet", new ExactStellarScheme())'), "network wired into scheme registration (testnet)");
+  assert(injectedText.includes('"stellar:testnet" as const'), "network injected with literal type preserved (testnet)");
   assert(injectedText.includes('serviceName: "express-fresh-fixture",'), "serviceName injected");
+
+  console.log("\n4b. Same injection with network=stellar:pubnet...");
+  const pubnetConfig = { ...config, network: "stellar:pubnet" };
+  const pubnetEdits = computeEdits(lines, picked, pubnetConfig);
+  const pubnetInjectedText = applyEdits(originalText, pubnetEdits);
+  assert(pubnetInjectedText.includes('.register("stellar:pubnet", new ExactStellarScheme())'), "network wired into scheme registration (pubnet)");
+  assert(pubnetInjectedText.includes('"stellar:pubnet" as const'), "network injected with literal type preserved (pubnet)");
+  assert(!pubnetInjectedText.includes("stellar:testnet"), "pubnet injection does not also contain a stray testnet literal");
   assert(injectedText.includes('tags: ["api", "x402"],'), "tags injected");
   assert(injectedText.includes(".registerExtension(bazaarResourceServerExtension);"), "bazaarResourceServerExtension registered on the server chain");
   assert(injectedText.includes("extensions: declareDiscoveryExtension({"), "Bazaar discovery extension declared on the route config");

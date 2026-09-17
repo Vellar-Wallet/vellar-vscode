@@ -60,6 +60,7 @@ try {
   const config = {
     priceUsdc: "1",
     payToAddress: "GA123456789EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXX",
+    network: "stellar:testnet",
     endpointUrl: "/policies/generate",
     serviceName: "@vellar/policy-service",
   };

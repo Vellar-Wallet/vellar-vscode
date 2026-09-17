@@ -56,12 +56,22 @@ exports.EventEmitter = EventEmitter;
 // module in a fresh Node process each time — these scripts never share a
 // process, so there is no cross-test leakage to worry about).
 let configuredPayToAddress = "";
+// undefined means "unset" — get()'s own fallback (the real declared default,
+// "stellar:pubnet") applies, exactly like a real VS Code settings.json with
+// no vellar-x402.network entry at all.
+let configuredNetwork;
 const outputChannelLines = [];
 const notificationsShown = [];
 
 exports._test = {
   setPayToAddress(value) {
     configuredPayToAddress = value;
+  },
+  setNetwork(value) {
+    configuredNetwork = value;
+  },
+  resetNetwork() {
+    configuredNetwork = undefined;
   },
   get outputChannelLines() {
     return outputChannelLines;
@@ -75,6 +85,7 @@ exports.workspace = {
   getConfiguration: (section) => ({
     get: (key, fallback) => {
       if (section === "vellar-x402" && key === "payToAddress") return configuredPayToAddress;
+      if (section === "vellar-x402" && key === "network") return configuredNetwork ?? fallback;
       return fallback;
     },
   }),

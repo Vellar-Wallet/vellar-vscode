@@ -57,6 +57,7 @@ try {
   const config = {
     priceUsdc: "0.03",
     payToAddress: "GA123456789EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXX",
+    network: "stellar:testnet",
     endpointUrl: "/api/weather",
     serviceName: "next-app-router-fresh-fixture",
   };

@@ -4,24 +4,41 @@ import { formatAtomicUsdc, looksLikeStellarGAddress, truncateMiddle } from "./fo
 import { checkEndpointNotifications, checkSettlementNotifications } from "./notifications";
 import { logAndGenericError } from "./outputChannel";
 import { PollingSource } from "./polling";
+import type { StellarNetwork } from "../types";
 
-const HORIZON_TESTNET = "https://horizon-testnet.stellar.org";
+const DEFAULT_NETWORK: StellarNetwork = "stellar:pubnet";
 
-// The canonical testnet USDC issuer used across the Vellar stack (facilitator,
-// explorer). Matched by asset_code AND asset_issuer together — asset_code alone
-// proves nothing, anyone can issue a token also called "USDC".
-const USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+const HORIZON_URL_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": "https://horizon-testnet.stellar.org",
+  "stellar:pubnet": "https://horizon.stellar.org",
+};
+
+// The canonical USDC issuer used across the Vellar stack (facilitator, explorer),
+// keyed by network — testnet and mainnet USDC are different assets with different
+// issuers, not the same asset on two networks. Matched by asset_code AND
+// asset_issuer together — asset_code alone proves nothing, anyone can issue a
+// token also called "USDC". Mainnet value is Circle's canonical mainnet USDC
+// issuer, confirmed against vellar-facilitator's own mainnet settlement config.
+const USDC_ISSUER_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "stellar:pubnet": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+};
 const USDC_CODE = "USDC";
 
-// The SAME canonical USDC, but as a Soroban SAC contract ID (a C-address), not the
-// classic asset issuer above (a G-address) — two different identifier kinds for
-// the same underlying asset, not two different assets. Horizon's classic
-// /accounts endpoint (wallet balances, above) speaks issuer+code; the
-// facilitator's discovery catalog (endpoints, below) speaks SAC contract IDs,
-// since settlement happens through the token contract. Confirmed against the
-// live facilitator response and cross-checked against vellar-facilitator's own
-// config.
-const USDC_SAC_CONTRACT = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+// The SAME canonical USDC (per network), but as a Soroban SAC contract ID (a
+// C-address), not the classic asset issuer above (a G-address) — two different
+// identifier kinds for the same underlying asset, not two different assets.
+// Horizon's classic /accounts endpoint (wallet balances, above) speaks
+// issuer+code; the facilitator's discovery catalog (endpoints, below) speaks
+// SAC contract IDs, since settlement happens through the token contract.
+// Testnet value confirmed against the live facilitator response and
+// cross-checked against vellar-facilitator's own config; mainnet value
+// confirmed the same way against vellar-facilitator's mainnet /supported
+// response and live mainnet settlements.
+const USDC_SAC_CONTRACT_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+  "stellar:pubnet": "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
+};
 
 const FACILITATOR_BASE = "https://vellar-facilitator.onrender.com";
 
@@ -340,14 +357,29 @@ export class DataProvider implements vscode.Disposable {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
+  /** Always re-reads the live setting, same rule as getConfiguredAddress()
+   *  above. Falls back to DEFAULT_NETWORK for anything other than the two
+   *  values the package.json enum declares — a corrupted or stale
+   *  settings.json value must never silently propagate into a network
+   *  identifier passed to Horizon, Soroban RPC, or the x402 client. */
+  static getConfiguredNetwork(): StellarNetwork {
+    const raw = vscode.workspace.getConfiguration("vellar-x402").get<string>("network", DEFAULT_NETWORK);
+    return raw === "stellar:testnet" || raw === "stellar:pubnet" ? raw : DEFAULT_NETWORK;
+  }
+
   private async fetchWalletBalance(): Promise<WalletBalanceState> {
     const address = DataProvider.getConfiguredAddress();
     if (!address) return { kind: "unconfigured" };
     if (!looksLikeStellarGAddress(address)) return { kind: "invalid-address" };
 
-    // Horizon 404s an account that has never been funded on testnet — a real,
-    // common case (a freshly generated address before its first friendbot call),
-    // not a fault. Surfaced as its own "unfunded" state (rather than a fake
+    // Read live, same rule as the address above — never cached, re-checked on
+    // every poll tick, so a mid-session network switch takes effect immediately.
+    const network = DataProvider.getConfiguredNetwork();
+
+    // Horizon 404s an account that has never been funded — a real, common case
+    // (a freshly generated address before its first friendbot call on testnet,
+    // or simply an address that has never received XLM on mainnet), not a
+    // fault. Surfaced as its own "unfunded" state (rather than a fake
     // zero-balance "loaded" result) so the sidebar can tell the developer what
     // they're actually looking at: an account that can't hold ANY balance yet,
     // XLM or USDC, as opposed to a funded account that simply has no trustline
@@ -355,7 +387,7 @@ export class DataProvider implements vscode.Disposable {
     let account: HorizonAccountResponse;
     try {
       account = await httpsGetJson<HorizonAccountResponse>(
-        `${HORIZON_TESTNET}/accounts/${encodeURIComponent(address)}`,
+        `${HORIZON_URL_BY_NETWORK[network]}/accounts/${encodeURIComponent(address)}`,
       );
     } catch (err) {
       if (isNotFound(err)) return { kind: "unfunded", address };
@@ -364,7 +396,7 @@ export class DataProvider implements vscode.Disposable {
 
     const xlm = account.balances.find((b) => b.asset_type === "native")?.balance ?? "0";
     const usdcBalance = account.balances.find(
-      (b) => b.asset_code === USDC_CODE && b.asset_issuer === USDC_ISSUER,
+      (b) => b.asset_code === USDC_CODE && b.asset_issuer === USDC_ISSUER_BY_NETWORK[network],
     );
     // A trustline is the balances[] entry itself existing — an account with no
     // USDC trustline has no such entry at all (not an entry with balance "0"),
@@ -489,7 +521,11 @@ export class DataProvider implements vscode.Disposable {
  */
 function formatPrice(accept: DiscoveryAccept | undefined): string {
   if (!accept) return "—";
-  if (accept.asset === USDC_SAC_CONTRACT) {
+  // Read live, same rule as every other network read in this file — a listing
+  // fetched under one network setting should never be labeled against the
+  // other network's USDC contract id.
+  const network = DataProvider.getConfiguredNetwork();
+  if (accept.asset === USDC_SAC_CONTRACT_BY_NETWORK[network]) {
     return `${formatAtomicUsdc(accept.amount)} USDC`;
   }
   return `${accept.amount} (${truncateMiddle(accept.asset)})`;

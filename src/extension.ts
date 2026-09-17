@@ -121,6 +121,7 @@ async function addPaymentCommand(): Promise<void> {
   const config: PaymentConfig = {
     priceUsdc,
     payToAddress,
+    network: DataProvider.getConfiguredNetwork(),
     endpointUrl: picked.routePath,
     serviceName,
   };

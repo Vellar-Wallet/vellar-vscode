@@ -25,9 +25,12 @@ import { x402HTTPClient } from "@x402/core/http";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { createEd25519Signer } from "@x402/stellar";
 import { withTimeout, SOROBAN_RPC_TIMEOUT_MS } from "./usdc";
+import type { StellarNetwork } from "../../types";
 
-const NETWORK = "stellar:testnet";
-const RPC_URL = "https://soroban-testnet.stellar.org";
+const RPC_URL_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": "https://soroban-testnet.stellar.org",
+  "stellar:pubnet": "https://mainnet.sorobanrpc.com",
+};
 const GET_TIMEOUT_MS = 30_000;
 
 export class PaymentFlowError extends Error {
@@ -71,7 +74,10 @@ export interface DiscoveredPaymentRequirement {
  *    directly from the endpoint's own real 402 challenge, never from
  *    anything the webview claims.
  */
-export async function discoverPaymentRequirement(resourceUrl: string): Promise<DiscoveredPaymentRequirement> {
+export async function discoverPaymentRequirement(
+  resourceUrl: string,
+  network: StellarNetwork,
+): Promise<DiscoveredPaymentRequirement> {
   const http = new x402HTTPClient(new x402Client());
 
   let unpaid: Response;
@@ -88,9 +94,9 @@ export async function discoverPaymentRequirement(resourceUrl: string): Promise<D
   }
 
   const required = http.getPaymentRequiredResponse((name) => unpaid.headers.get(name), undefined);
-  const req = required.accepts?.find((a) => a.network === NETWORK && a.scheme === "exact");
+  const req = required.accepts?.find((a) => a.network === network && a.scheme === "exact");
   if (!req) {
-    throw new PaymentFlowError("no_requirement", `The endpoint has no ${NETWORK} "exact" payment option.`);
+    throw new PaymentFlowError("no_requirement", `The endpoint has no ${network} "exact" payment option.`);
   }
   return { payTo: req.payTo, amount: req.amount, asset: req.asset };
 }
@@ -116,10 +122,11 @@ export type PaymentFlowStep =
 export async function runPaymentFlow(
   throwawaySecret: string,
   resourceUrl: string,
+  network: StellarNetwork,
   onStep: (event: PaymentFlowStep) => void,
 ): Promise<PaymentFlowResult> {
-  const signer = createEd25519Signer(throwawaySecret, NETWORK);
-  const client = new x402Client().register(NETWORK, new ExactStellarScheme(signer, { url: RPC_URL }));
+  const signer = createEd25519Signer(throwawaySecret, network);
+  const client = new x402Client().register(network, new ExactStellarScheme(signer, { url: RPC_URL_BY_NETWORK[network] }));
   const http = new x402HTTPClient(client);
 
   // Step 5: GET the resource, expect 402 with payment requirements. Not
@@ -143,9 +150,9 @@ export async function runPaymentFlow(
   }
 
   const required = http.getPaymentRequiredResponse((name) => unpaid.headers.get(name), undefined);
-  const req = required.accepts?.find((a) => a.network === NETWORK && a.scheme === "exact");
+  const req = required.accepts?.find((a) => a.network === network && a.scheme === "exact");
   if (!req) {
-    throw new PaymentFlowError("no_requirement", `The endpoint has no ${NETWORK} "exact" payment option.`);
+    throw new PaymentFlowError("no_requirement", `The endpoint has no ${network} "exact" payment option.`);
   }
   onStep({ step: "get_request", status: "done" });
 

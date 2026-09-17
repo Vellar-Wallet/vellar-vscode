@@ -105,3 +105,6 @@ jobs:
 
       - name: Run test-payment assertion check
         run: node scripts/run-testpayment-assertion-check.js
+
+      - name: Run network switch check
+        run: node scripts/run-network-switch-check.js

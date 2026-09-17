@@ -48,6 +48,12 @@
           "default": "",
           "description": "Your Stellar G-address where USDC x402 payments should land."
         },
+        "vellar-x402.network": {
+          "type": "string",
+          "enum": ["stellar:testnet", "stellar:pubnet"],
+          "default": "stellar:pubnet",
+          "description": "The Stellar network to use for test payments and generated x402 boilerplate."
+        },
         "vellar-x402.notifyOnEveryPayment": {
           "type": "boolean",
           "default": false,

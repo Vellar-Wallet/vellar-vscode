@@ -1,7 +1,9 @@
 /**
- * Provision a throwaway keypair with testnet USDC: open a trustline, then buy
- * `targetAmountAtomic`'s worth on the testnet DEX, paying in the wallet's own
- * XLM (friendbot-funded by the caller before this runs).
+ * Provision a throwaway keypair with USDC on the configured network: open a
+ * trustline, then buy `targetAmountAtomic`'s worth on that network's DEX,
+ * paying in the wallet's own XLM (friendbot-funded by the caller before this
+ * runs, on testnet — see runTestPayment.ts's own gate on the pubnet case,
+ * since friendbot has no mainnet equivalent).
  *
  * Ported from vellar-playground/lib/usdc.ts (itself ported from
  * vellar-facilitator/examples/provision-testnet.mjs's USE_USDC path) — the
@@ -15,10 +17,11 @@
  *    accepts[].amount, read fresh at click time) — no catalog lookup needed,
  *    the caller (runTestPayment.ts) computes the 5x target directly and
  *    passes it in as `targetAmountAtomic`.
- *  - USDC_ISSUER is a local constant here, not imported from a shared config
- *    module — this file has no sibling config file of its own, and the value
- *    is identical to (and cross-checked against) dataProvider.ts's own
- *    USDC_ISSUER constant, which already has its own provenance comment.
+ *  - USDC_ISSUER_BY_NETWORK is a local constant here, not imported from a
+ *    shared config module — this file has no sibling config file of its own,
+ *    and each network's value is identical to (and cross-checked against)
+ *    dataProvider.ts's own USDC_ISSUER_BY_NETWORK constant, which already has
+ *    its own provenance comment.
  *  - No `console.error`/`console.log` calls: this module is used ONLY from
  *    the extension host's test-payment flow, where ALL logging goes through
  *    outputChannel.ts's logAndGenericError (the one place raw errors are
@@ -32,18 +35,33 @@
  */
 
 import { Asset, Horizon, Keypair, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import type { StellarNetwork } from "../../types";
 
-const HORIZON_URL = "https://horizon-testnet.stellar.org";
-const PASSPHRASE = Networks.TESTNET;
+// Exported (read-only, no behavior change) so scripts/network-switch-entry.ts
+// can assert the real network->URL/issuer mapping directly, the same reason
+// HORIZON_FETCH_TIMEOUT_MS etc. below are exported — this is the single
+// highest-consequence lookup in the whole network-switching feature (get it
+// wrong and a real trade targets the wrong asset or the wrong ledger).
+export const HORIZON_URL_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": "https://horizon-testnet.stellar.org",
+  "stellar:pubnet": "https://horizon.stellar.org",
+};
+const PASSPHRASE_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": Networks.TESTNET,
+  "stellar:pubnet": Networks.PUBLIC,
+};
 
-// Same canonical testnet USDC issuer as dataProvider.ts's USDC_ISSUER — see
-// that file's own comment for how this was confirmed (matched by asset_code
-// AND asset_issuer together, cross-checked against the live facilitator and
-// explorer). Not imported from there to avoid a payment-flow module reaching
-// into the polling/display module for an unrelated constant; kept as its own
-// literal here, with this note pointing at the sibling copy so the two never
-// silently drift without the drift being obvious in a diff.
-const USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+// Same canonical USDC issuers as dataProvider.ts's USDC_ISSUER_BY_NETWORK —
+// see that file's own comment for how each was confirmed (matched by
+// asset_code AND asset_issuer together, cross-checked against the live
+// facilitator and explorer). Not imported from there to avoid a payment-flow
+// module reaching into the polling/display module for an unrelated constant;
+// kept as its own literal here, with this note pointing at the sibling copy
+// so the two never silently drift without the drift being obvious in a diff.
+export const USDC_ISSUER_BY_NETWORK: Record<StellarNetwork, string> = {
+  "stellar:testnet": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "stellar:pubnet": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+};
 
 // See vellar-playground/lib/usdc.ts's own comment on this exact number: the
 // reference script observed ~0.559 XLM per USDC on the live testnet DEX and
@@ -163,10 +181,11 @@ async function submitClassic(
   kp: Keypair,
   ops: ReturnType<typeof Operation.changeTrust | typeof Operation.pathPaymentStrictReceive>[],
   label: string,
+  network: StellarNetwork,
 ): Promise<{ ok: true; hash: string } | { ok: false; reason: string }> {
   try {
     const account = await withTimeout(horizon.loadAccount(kp.publicKey()), HORIZON_FETCH_TIMEOUT_MS, `${label}: loadAccount`);
-    let txBuilder = new TransactionBuilder(account, { fee: "1000000", networkPassphrase: PASSPHRASE });
+    let txBuilder = new TransactionBuilder(account, { fee: "1000000", networkPassphrase: PASSPHRASE_BY_NETWORK[network] });
     for (const op of ops) txBuilder = txBuilder.addOperation(op);
     const tx = txBuilder.setTimeout(SUBMIT_TIMEOUT_SECONDS).build();
     tx.sign(kp);
@@ -187,13 +206,13 @@ async function submitClassic(
   }
 }
 
-/** Step 1 of USDC provisioning: open a trustline to the canonical testnet
- *  USDC issuer on `keypair`'s account. Never throws. */
-export async function openUsdcTrustline(keypair: Keypair): Promise<OpenTrustlineResult> {
-  const horizon = new Horizon.Server(HORIZON_URL);
-  const asset = new Asset("USDC", USDC_ISSUER);
+/** Step 1 of USDC provisioning: open a trustline to the canonical USDC
+ *  issuer for `network` on `keypair`'s account. Never throws. */
+export async function openUsdcTrustline(keypair: Keypair, network: StellarNetwork): Promise<OpenTrustlineResult> {
+  const horizon = new Horizon.Server(HORIZON_URL_BY_NETWORK[network]);
+  const asset = new Asset("USDC", USDC_ISSUER_BY_NETWORK[network]);
 
-  const trustlineResult = await submitClassic(horizon, keypair, [Operation.changeTrust({ asset })], "USDC trustline");
+  const trustlineResult = await submitClassic(horizon, keypair, [Operation.changeTrust({ asset })], "USDC trustline", network);
   if (!trustlineResult.ok) return { ok: false, reason: "couldn't open a USDC trustline" };
   return { ok: true };
 }
@@ -204,13 +223,17 @@ export async function openUsdcTrustline(keypair: Keypair): Promise<OpenTrustline
  * by the wallet's own XLM. Assumes a trustline is already open. Never
  * throws.
  */
-export async function buyUsdc(keypair: Keypair, targetAmountAtomic: string): Promise<BuyUsdcResult> {
+export async function buyUsdc(
+  keypair: Keypair,
+  targetAmountAtomic: string,
+  network: StellarNetwork,
+): Promise<BuyUsdcResult> {
   if (!/^\d+$/.test(targetAmountAtomic) || BigInt(targetAmountAtomic) <= 0n) {
     return { ok: false, reason: "invalid funding target" };
   }
 
-  const horizon = new Horizon.Server(HORIZON_URL);
-  const asset = new Asset("USDC", USDC_ISSUER);
+  const horizon = new Horizon.Server(HORIZON_URL_BY_NETWORK[network]);
+  const asset = new Asset("USDC", USDC_ISSUER_BY_NETWORK[network]);
   const targetAtomic = BigInt(targetAmountAtomic);
   const destAmount = atomicToDecimalString(targetAtomic);
 
@@ -226,7 +249,7 @@ export async function buyUsdc(keypair: Keypair, targetAmountAtomic: string): Pro
       "USDC purchase: strictReceivePaths",
     )) as unknown as Horizon.ServerApi.CollectionPage<Horizon.ServerApi.PaymentPathRecord>;
     if (!paths.records.length) {
-      return { ok: false, reason: "no USDC market route available on testnet right now" };
+      return { ok: false, reason: "no USDC market route available right now" };
     }
     path = paths.records[0].path.map((p) =>
       p.asset_type === "native" ? Asset.native() : new Asset(p.asset_code!, p.asset_issuer!),
@@ -252,20 +275,23 @@ export async function buyUsdc(keypair: Keypair, targetAmountAtomic: string): Pro
       }),
     ],
     "USDC purchase",
+    network,
   );
-  if (!purchaseResult.ok) return { ok: false, reason: "couldn't buy USDC on the testnet market" };
+  if (!purchaseResult.ok) return { ok: false, reason: "couldn't buy USDC on the market" };
 
   // Re-read the real balance from Horizon rather than assuming destAmount
   // landed exactly.
   try {
-    const res = await fetch(`${HORIZON_URL}/accounts/${encodeURIComponent(keypair.publicKey())}`, {
+    const res = await fetch(`${HORIZON_URL_BY_NETWORK[network]}/accounts/${encodeURIComponent(keypair.publicKey())}`, {
       signal: AbortSignal.timeout(HORIZON_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`horizon returned HTTP ${res.status}`);
     const account = (await res.json()) as {
       balances?: Array<{ asset_code?: string; asset_issuer?: string; balance: string }>;
     };
-    const line = account.balances?.find((b) => b.asset_code === "USDC" && b.asset_issuer === USDC_ISSUER);
+    const line = account.balances?.find(
+      (b) => b.asset_code === "USDC" && b.asset_issuer === USDC_ISSUER_BY_NETWORK[network],
+    );
     if (!line) return { ok: false, reason: "USDC purchase didn't complete as expected" };
     return { ok: true, balanceUsdc: line.balance };
   } catch {

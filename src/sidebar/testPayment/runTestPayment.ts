@@ -1,10 +1,17 @@
 /**
- * Orchestrates the full 6-step throwaway test payment:
+ * Orchestrates the full 6-step throwaway test payment, against whichever
+ * network vellar-x402.network currently names (read once, live, at the top
+ * of runTestPayment — see DataProvider.getConfiguredNetwork()):
  *   1. Generate keypair (in memory only)
  *   2. Fund via friendbot
- *   3. Acquire USDC via testnet DEX (trustline + DEX purchase)
+ *   3. Acquire USDC via the network's own DEX (trustline + DEX purchase)
  *   4-6. Build the x402 client, GET expecting 402, sign, retry with
  *        PAYMENT-SIGNATURE (see payment.ts)
+ *
+ * Friendbot (Step 2) has no mainnet equivalent, so the flow fails fast, before
+ * any network call, when the configured network is stellar:pubnet — see the
+ * explicit check right after the network is read. Everything below that point
+ * in this file only ever runs against stellar:testnet.
  *
  * THIS IS THE HIGHEST-SECURITY-RISK FILE IN THE SIDEBAR. Every rule below is
  * enforced structurally, not just documented:
@@ -80,6 +87,23 @@ export async function runTestPayment(
 ): Promise<string | undefined> {
   const resource = target.kind === "listing" ? target.listing.resource : target.url;
   try {
+    // Read live, same rule as every other setting read in this flow — never
+    // cached, so a mid-session network switch takes effect on the next run.
+    const network = DataProvider.getConfiguredNetwork();
+
+    // Friendbot (Step 2 below) has no mainnet equivalent — there is no free
+    // faucet for real XLM, and this codebase has no configured funding-source
+    // keypair to send real XLM from. Rather than let fundWithFriendbot's
+    // HTTPS call run against a pubnet keypair (which would misleadingly
+    // succeed against the TESTNET ledger for that address, then fail
+    // confusingly at a later, unrelated step), fail loudly here, before any
+    // network call, with a message that says exactly what's unsupported.
+    if (network === "stellar:pubnet") {
+      throw new Error(
+        "Test payment isn't supported on mainnet yet — no funding source is configured for stellar:pubnet.",
+      );
+    }
+
     let payTo: string;
     let amount: string;
 
@@ -95,7 +119,7 @@ export async function runTestPayment(
       // assumed, never taken from anything the webview sent alongside the
       // URL (it sent nothing alongside it; the URL is the only input).
       progress.report({ message: "Checking the endpoint's payment requirement…", increment: 0 });
-      const discovered = await discoverPaymentRequirement(target.url);
+      const discovered = await discoverPaymentRequirement(target.url, network);
       payTo = discovered.payTo;
       amount = discovered.amount;
     }
@@ -146,19 +170,19 @@ export async function runTestPayment(
     // for a manual URL — never re-derived from a formatted display string
     // either way).
     progress.report({ message: "Opening a USDC trustline…", increment: 15 });
-    const trustline = await openUsdcTrustline(keypair);
+    const trustline = await openUsdcTrustline(keypair, network);
     if (!trustline.ok) throw new Error(`USDC trustline failed: ${trustline.reason}`);
     if (token.isCancellationRequested) return undefined;
 
     progress.report({ message: "Buying testnet USDC on the DEX…", increment: 15 });
     const targetAtomic = (BigInt(amount) * FUNDING_MULTIPLE).toString();
-    const purchase = await buyUsdc(keypair, targetAtomic);
+    const purchase = await buyUsdc(keypair, targetAtomic, network);
     if (!purchase.ok) throw new Error(`USDC purchase failed: ${purchase.reason}`);
     if (token.isCancellationRequested) return undefined;
 
     // Steps 4-6: the real x402 payment flow.
     progress.report({ message: "Requesting the endpoint (expecting 402)…", increment: 15 });
-    const result = await runPaymentFlow(throwawaySecret, resource, (event) => {
+    const result = await runPaymentFlow(throwawaySecret, resource, network, (event) => {
       if (event.step === "sign") {
         progress.report({ message: "Signing the payment…", increment: 15 });
       } else if (event.step === "settle") {

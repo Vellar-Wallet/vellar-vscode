@@ -1,6 +1,15 @@
 /** HTTP method a detected route responds to. Uppercase, matching x402's route-config keys. */
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+/**
+ * Stellar CAIP-2 network identifier, per @x402/stellar — the only two values
+ * vellar-x402.network's package.json enum declares. Shared here (rather than
+ * defined next to getConfiguredNetwork() in dataProvider.ts) so pure,
+ * vscode-free modules like testPayment/usdc.ts and testPayment/payment.ts can
+ * import the type without importing anything vscode-shaped.
+ */
+export type StellarNetwork = "stellar:testnet" | "stellar:pubnet";
+
 /** Frameworks slice one knows how to detect and inject into. */
 export type Framework =
   | "express"
@@ -47,6 +56,14 @@ export interface PaymentConfig {
   priceUsdc: string;
   /** Stellar G-address from vellar-x402.payToAddress. */
   payToAddress: string;
+  /**
+   * Stellar network from vellar-x402.network, resolved once by the (vscode-
+   * aware) command handler that builds this config — same seam payToAddress
+   * already uses. Generators (src/generators/**, src/injector.ts) stay pure,
+   * vscode-free functions: they read this field rather than resolving the
+   * setting themselves.
+   */
+  network: StellarNetwork;
   /** Endpoint URL used as the description default. Best-effort; editable by the developer. */
   endpointUrl: string;
   /**

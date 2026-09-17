@@ -2,14 +2,6 @@ import type { PaymentConfig } from "../types";
 
 export const FACILITATOR_URL = "https://vellar-facilitator.onrender.com";
 
-/**
- * Stellar CAIP-2 network identifiers, per @x402/stellar. Slice one always targets
- * testnet in generated code — switching to mainnet (`stellar:pubnet`) is a one-line
- * edit the developer makes deliberately, not something a code-gen command should
- * decide silently.
- */
-export const STELLAR_TESTNET_NETWORK = "stellar:testnet";
-
 /** Formats the validated USDC price as the `$0.05`-style dollar-string @x402/stellar expects. */
 export function formatPrice(priceUsdc: string): string {
   return `$${priceUsdc}`;
@@ -24,13 +16,22 @@ export function formatPrice(priceUsdc: string): string {
  * @x402/core types `PaymentOption.network` as a template-literal type, and without
  * this the object literal widens to plain `string` and fails to type-check against
  * `RoutesConfig`. Confirmed against @x402/core's real .d.ts, not assumed.
+ *
+ * `config.network` is baked in as a literal here, same pattern as
+ * PAYMENT_CONFIG.payToAddress below: resolved once, from vellar-x402.network,
+ * by the (vscode-aware) command handler that builds `config`, before this
+ * pure function ever runs — src/generators/** and src/injector.ts stay
+ * vscode-free. The generated app has no runtime dependency on VS Code
+ * settings; switching a previously-generated file's network afterward is a
+ * deliberate edit the developer makes to that file, not something re-running
+ * the generator silently changes for them.
  */
 export function renderAccepts(config: PaymentConfig, indent: string): string {
   return [
     `${indent}accepts: {`,
     `${indent}  scheme: "exact" as const,`,
     `${indent}  price: "${formatPrice(config.priceUsdc)}",`,
-    `${indent}  network: "${STELLAR_TESTNET_NETWORK}" as const,`,
+    `${indent}  network: "${config.network}" as const,`,
     `${indent}  payTo: PAYMENT_CONFIG.payToAddress,`,
     `${indent}},`,
   ].join("\n");

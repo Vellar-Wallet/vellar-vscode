@@ -60,6 +60,7 @@ try {
   const config = {
     priceUsdc: "0.02",
     payToAddress: "GA123456789EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXX",
+    network: "stellar:testnet",
     endpointUrl: "/weather",
     serviceName: "fastify-fresh-fixture",
   };

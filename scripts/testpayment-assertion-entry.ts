@@ -17,6 +17,7 @@ import * as fakeFriendbot from "./fake-friendbot";
 
 interface VscodeTestNamespace {
   setPayToAddress(value: string): void;
+  setNetwork(value: string): void;
   outputChannelLines: string[];
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -69,6 +70,11 @@ function installCollidingRandom(): { publicKey: string; restore(): void } {
 
 async function testCollisionThrowsBeforeFriendbot(): Promise<void> {
   fakeFriendbot._test.reset();
+  // These tests exercise the payTo-collision assertions specifically, which
+  // run AFTER the network gate — force testnet so the flow actually reaches
+  // them, isolated from testNetworkPubnetFailsBeforeFriendbot's own coverage
+  // of the gate itself, below.
+  vscodeTest.setNetwork("stellar:testnet");
   const { publicKey, restore } = installCollidingRandom();
   vscodeTest.setPayToAddress(publicKey); // developer's own address == what Keypair.random() will now return
   vscodeTest.outputChannelLines.length = 0;
@@ -95,6 +101,7 @@ async function testCollisionThrowsBeforeFriendbot(): Promise<void> {
 
 async function testDifferentAddressesProceedPastAssertion(): Promise<void> {
   fakeFriendbot._test.reset();
+  vscodeTest.setNetwork("stellar:testnet");
   vscodeTest.setPayToAddress("GDIFFERENTPAYTOTHATISNOTUSED0000000000000000000000000000");
   vscodeTest.outputChannelLines.length = 0;
 
@@ -132,6 +139,7 @@ async function testDifferentAddressesProceedPastAssertion(): Promise<void> {
  */
 async function testPayToCollisionThrowsBeforeFriendbot(): Promise<void> {
   fakeFriendbot._test.reset();
+  vscodeTest.setNetwork("stellar:testnet");
   const { publicKey, restore } = installCollidingRandom();
   vscodeTest.setPayToAddress("GDEVELOPERSOWNUNRELATEDADDRESS00000000000000000000000000");
   vscodeTest.outputChannelLines.length = 0;
@@ -160,8 +168,46 @@ async function testPayToCollisionThrowsBeforeFriendbot(): Promise<void> {
   console.log("  ok: throwaway === endpoint's payTo — runTestPayment fails, fundWithFriendbot is NEVER called");
 }
 
+/**
+ * Proves the network gate added for stellar:pubnet (friendbot has no mainnet
+ * equivalent — see runTestPayment.ts's own comment): with the network
+ * setting at "stellar:pubnet", runTestPayment must fail fast, before ANY
+ * network call (including friendbot, and before even the payTo-collision
+ * assertions above run), with a message that says mainnet isn't supported.
+ * Uses a genuinely random keypair and a non-colliding payTo — this test is
+ * isolated from the payTo-collision assertions on purpose, so a failure here
+ * can only mean the network gate itself, not one of those.
+ */
+async function testNetworkPubnetFailsBeforeFriendbot(): Promise<void> {
+  fakeFriendbot._test.reset();
+  vscodeTest.setNetwork("stellar:pubnet");
+  vscodeTest.setPayToAddress("GDIFFERENTPAYTOTHATISNOTUSED0000000000000000000000000000");
+  vscodeTest.outputChannelLines.length = 0;
+
+  const result = await runTestPayment(FAKE_TARGET, fakeProgress() as never, fakeToken() as never);
+
+  if (result !== undefined) {
+    throw new Error(`FAIL: expected runTestPayment to fail on stellar:pubnet (no funding source), got ${result}`);
+  }
+  if (fakeFriendbot._test.callCount !== 0) {
+    throw new Error(
+      `FAIL: fundWithFriendbot was called ${fakeFriendbot._test.callCount} time(s) — the pubnet gate must throw BEFORE any network call`,
+    );
+  }
+  const loggedGate = vscodeTest.outputChannelLines.some((line) => line.includes("isn't supported on mainnet"));
+  if (!loggedGate) {
+    throw new Error(
+      `FAIL: expected the output channel to record the mainnet-not-supported error; got: ${JSON.stringify(vscodeTest.outputChannelLines)}`,
+    );
+  }
+  console.log("  ok: network=stellar:pubnet — runTestPayment fails, fundWithFriendbot is NEVER called, gate is logged");
+
+  vscodeTest.setNetwork("stellar:testnet"); // restore, so later tests in this process aren't affected
+}
+
 export async function runAssertionChecks(): Promise<void> {
   await testCollisionThrowsBeforeFriendbot();
   await testDifferentAddressesProceedPastAssertion();
   await testPayToCollisionThrowsBeforeFriendbot();
+  await testNetworkPubnetFailsBeforeFriendbot();
 }

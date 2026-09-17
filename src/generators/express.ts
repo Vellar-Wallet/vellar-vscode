@@ -35,7 +35,7 @@ export function renderExpressSetupBlock(route: DetectedRoute, config: PaymentCon
     ``,
     `const x402FacilitatorClient = new HTTPFacilitatorClient({ url: "${FACILITATOR_URL}" });`,
     `const x402Server = new x402ResourceServer(x402FacilitatorClient)`,
-    `  .register("stellar:testnet", new ExactStellarScheme())`,
+    `  .register("${config.network}", new ExactStellarScheme())`,
     `  .registerExtension(bazaarResourceServerExtension);`,
     ``,
     `const x402Routes = {`,
