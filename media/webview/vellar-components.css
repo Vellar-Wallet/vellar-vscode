@@ -63,6 +63,54 @@ body {
   margin: 0 0 var(--sp-3);
 }
 
+/* Wallet's own eyebrow row also carries the network badge, pushed to the
+   far end — the only eyebrow that needs a second element, so this is an
+   opt-in modifier rather than changing .eyebrow's own layout for every
+   section's single-label case. */
+.eyebrow--split {
+  justify-content: space-between;
+}
+
+/* The network toggle — a clickable badge, not a passive label: reuses
+   .badge's own clip-cut fill shape (see that rule's comment on why ink text
+   on an accent fill is the one place these colors carry text legibly) but
+   needs its own class rather than reusing .badge directly, since .badge is
+   a <span> today and this is a real <button> with hover/focus states a
+   passive label has no reason to have. Mint for testnet (the safe, no-real-
+   money default developers build against) and coral for mainnet (real
+   funds move once this is selected — the one accent already reserved
+   elsewhere in this system for "pay attention," e.g. .badge--unverified),
+   not an arbitrary color choice. */
+.network-badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.3em 0.7em;
+  border: 0;
+  cursor: pointer;
+  clip-path: var(--clip-br-sm);
+  transition: filter var(--dur-fast) ease;
+}
+.network-badge:hover {
+  filter: brightness(0.94);
+}
+.network-badge:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.network-badge--testnet {
+  background: var(--mint);
+  color: var(--ink);
+}
+.network-badge--mainnet {
+  background: var(--coral-soft);
+  color: var(--coral);
+}
+
 /* The clip-cut bordered field, built the same way the source does it: a
    colored background painted to the OUTER polygon acts as a pixel-exact
    1px border, and a ::before clipped to the 1px-inset polygon paints the

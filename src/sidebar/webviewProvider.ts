@@ -11,6 +11,7 @@ import { formatDecimalAmount, looksLikeTestableResourceUrl, truncateMiddle } fro
 import { logAndGenericError } from "./outputChannel";
 import { FocusVisibilityGate } from "./polling";
 import { runTestPayment, type TestPaymentTarget } from "./testPayment/runTestPayment";
+import type { StellarNetwork } from "../types";
 
 /**
  * The sidebar's single webview. `retainContextWhenHidden: false` (required) means
@@ -75,6 +76,19 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     this.dataProvider.settlements.onDidUpdate((result) => this.handleSettlementsPollUpdate(result));
 
     vscode.window.onDidChangeWindowState((state) => this.gate.setFocused(state.focused));
+
+    // Keeps the sidebar's own badge in sync with a change made OUTSIDE the
+    // toggle — the native Settings UI, or a direct settings.json edit — not
+    // just the toggle's own clicks (which already push a fresh "network"
+    // message themselves, see the "setNetwork" case in handleMessage below).
+    // Same no-explicit-disposal precedent as the onDidChangeWindowState
+    // listener directly above: this class isn't itself pushed to
+    // context.subscriptions, so neither listener is torn down before the
+    // extension host itself shuts down, which is fine for a listener with no
+    // meaningful "off" state short of that.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("vellar-x402.network")) this.postNetworkUpdate();
+    });
   }
 
   /**
@@ -141,6 +155,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     webviewView.onDidChangeVisibility(() => {
       this.gate.setVisible(webviewView.visible);
       if (webviewView.visible) {
+        this.postNetworkUpdate();
         this.postWalletUpdate(this.dataProvider.wallet.current);
         this.postSettlementsUpdate(this.currentSettlementsResult());
         this.postEarningsUpdate(this.dataProvider.settlements.current);
@@ -155,6 +170,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     // dataProvider.settlements.current directly, so a webview rebuilt while
     // the developer was on page 2/3 (e.g. the sidebar was hidden and shown
     // again) redraws the page it was actually on, not silently back to page 1.
+    this.postNetworkUpdate();
     this.postWalletUpdate(this.dataProvider.wallet.current);
     this.postEndpointsUpdate(this.dataProvider.endpoints.current);
     this.postSettlementsUpdate(this.currentSettlementsResult());
@@ -203,6 +219,16 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
    */
   private postWalletUpdate(state: import("./polling").PollResult<WalletBalanceState>): void {
     void this.view?.webview.postMessage({ type: "wallet", state: toWalletDisplayState(state) });
+  }
+
+  /** Pushes the current network setting to the webview — not sensitive
+   *  (unlike payToAddress), it's a two-value enum already visible to anyone
+   *  reading vscode settings, so this needs no display-transform step the
+   *  way wallet/endpoints/settlements do. Read live via
+   *  DataProvider.getConfiguredNetwork() every call, same rule as every
+   *  other config read in this codebase — never cached on this class. */
+  private postNetworkUpdate(): void {
+    void this.view?.webview.postMessage({ type: "network", network: DataProvider.getConfiguredNetwork() });
   }
 
   /** SettlementEntry.payer is a full Stellar address — same rule as the wallet's
@@ -360,6 +386,36 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       if (direction === "prev" || direction === "next") void this.goToSettlementsPage(direction);
       return;
     }
+    if (msg.type === "setNetwork") {
+      // Narrowed to exactly the two real network literals, same discipline
+      // as settlementsPage's direction check above — an unrecognized value
+      // (which the webview's own toggle can never actually send, but this
+      // handler doesn't trust that) is silently ignored rather than written
+      // to the setting.
+      const network = (message as { network?: unknown }).network;
+      if (network === "stellar:testnet" || network === "stellar:pubnet") void this.setNetwork(network);
+      return;
+    }
+  }
+
+  /**
+   * Writes the new network setting (Global scope, same as payToAddress's own
+   * implicit scope), then pushes the change back down immediately so the
+   * badge re-renders without waiting on the onDidChangeConfiguration
+   * listener's own event (which also fires from this write and would
+   * otherwise redraw the SAME badge a second time — postNetworkUpdate is
+   * cheap and idempotent, so the harmless double-render isn't worth adding
+   * a guard against), and refreshes Wallet/Endpoints/Settlements immediately
+   * — same "don't leave stale data under a new label" pattern already used
+   * after a test payment settles (see runTestPaymentFlow's own refresh
+   * calls), since all three sections' displayed data is network-scoped.
+   */
+  private async setNetwork(network: StellarNetwork): Promise<void> {
+    await DataProvider.setConfiguredNetwork(network);
+    this.postNetworkUpdate();
+    void this.dataProvider.wallet.refresh();
+    void this.dataProvider.endpoints.refresh();
+    void this.dataProvider.settlements.refresh();
   }
 
   /**
@@ -493,7 +549,10 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 <section class="sidebar-section">
-  <div class="eyebrow">Wallet</div>
+  <div class="eyebrow eyebrow--split">
+    <span>Wallet</span>
+    <button type="button" class="network-badge" id="network-badge" title="Click to switch network">Loading…</button>
+  </div>
   <div id="wallet-root">
     <div class="empty-state">Loading…</div>
   </div>
@@ -523,6 +582,41 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
+  // --- Network badge -------------------------------------------------------
+  // Tracked here (not re-derived from any section's own data) so
+  // renderSettlements below can pick the right stellar.expert host WITHOUT
+  // needing the extension host to thread network onto every settlement
+  // entry individually — this is the one place in the webview's JS that
+  // remembers "what network am I currently showing," same spirit as
+  // webviewProvider.ts's own settlementsCursorStack living on the host side:
+  // a single piece of view state, not duplicated per section.
+  // stellar:pubnet is this webview's own initial guess only — the very
+  // first real "network" message (always sent immediately on webview build,
+  // see resolveWebviewView) corrects it before any section that depends on
+  // it actually renders.
+  let currentNetwork = "stellar:pubnet";
+  const networkBadge = document.getElementById("network-badge");
+
+  function renderNetworkBadge(network) {
+    currentNetwork = network;
+    const isTestnet = network === "stellar:testnet";
+    networkBadge.textContent = isTestnet ? "Testnet" : "Mainnet";
+    networkBadge.classList.toggle("network-badge--testnet", isTestnet);
+    networkBadge.classList.toggle("network-badge--mainnet", !isTestnet);
+  }
+
+  networkBadge.addEventListener("click", () => {
+    const next = currentNetwork === "stellar:testnet" ? "stellar:pubnet" : "stellar:testnet";
+    // Optimistic: render the click's own result immediately rather than
+    // waiting on the round trip back from the host — the host's own
+    // "network" message (sent right after it finishes writing the setting,
+    // see setNetwork in webviewProvider.ts) will re-confirm the same value
+    // a moment later, which is a harmless, idempotent re-render, not a
+    // second source of truth diverging from this one.
+    renderNetworkBadge(next);
+    vscode.postMessage({ type: "setNetwork", network: next });
+  });
 
   function render(state) {
     if (state.status === "loading") {
@@ -742,7 +836,21 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
 
   // --- Recent Settlements --------------------------------------------------
   const settlementsRoot = document.getElementById("settlements-root");
-  const STELLAR_EXPERT_TX_BASE = "https://stellar.expert/explorer/testnet/tx/";
+
+  // A function, not a constant, because it must reflect whichever network is
+  // CURRENT at render time — currentNetwork (see the network badge above)
+  // can change between one renderSettlements call and the next, and a
+  // settlement entry's own tx hash carries no network of its own to derive
+  // this from. stellar.expert's own path segment for mainnet is "public",
+  // not "pubnet" or "mainnet" — confirmed against a real, live mainnet
+  // settlement's own stellar.expert transaction URL, not assumed from the
+  // vellar-x402.network setting's own "stellar:pubnet" spelling (which
+  // would have been the wrong guess).
+  function stellarExpertTxBase() {
+    return currentNetwork === "stellar:testnet"
+      ? "https://stellar.expert/explorer/testnet/tx/"
+      : "https://stellar.expert/explorer/public/tx/";
+  }
 
   // Tx hash display truncation happens HERE, not on the extension-host side, on
   // purpose: a tx hash is public on-chain data, not a secret like the payout
@@ -787,7 +895,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           </div>
           <div class="settlement-meta">
             <span class="settlement-time">\${escapeHtml(relativeTime(entry.closedAt))}</span>
-            <a class="settlement-tx-link" href="\${STELLAR_EXPERT_TX_BASE}\${encodeURIComponent(entry.txHash)}" target="_blank" rel="noreferrer">\${escapeHtml(truncateTxHash(entry.txHash))}</a>
+            <a class="settlement-tx-link" href="\${stellarExpertTxBase()}\${encodeURIComponent(entry.txHash)}" target="_blank" rel="noreferrer">\${escapeHtml(truncateTxHash(entry.txHash))}</a>
           </div>
         </div>
       \`,
@@ -866,6 +974,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   window.addEventListener("message", (event) => {
+    if (event.data?.type === "network") renderNetworkBadge(event.data.network);
     if (event.data?.type === "wallet") render(event.data.state);
     if (event.data?.type === "endpoints") renderEndpoints(event.data.state);
     if (event.data?.type === "settlements") renderSettlements(event.data.state, event.data.pagination);

@@ -108,3 +108,6 @@ jobs:
 
       - name: Run network switch check
         run: node scripts/run-network-switch-check.js
+
+      - name: Run network toggle check
+        run: node scripts/run-network-toggle-check.js

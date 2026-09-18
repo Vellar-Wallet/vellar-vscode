@@ -367,6 +367,18 @@ export class DataProvider implements vscode.Disposable {
     return raw === "stellar:testnet" || raw === "stellar:pubnet" ? raw : DEFAULT_NETWORK;
   }
 
+  /**
+   * Writes vellar-x402.network to Global scope — same scope payToAddress's
+   * own settings-UI edit path implicitly uses (VS Code's own default target
+   * for a setting not already pinned at Workspace level), so the sidebar
+   * toggle's write behaves like every other config edit in this extension:
+   * the developer's network choice follows them across workspaces, not
+   * scoped to whichever project they happened to be in when they clicked it.
+   */
+  static async setConfiguredNetwork(network: StellarNetwork): Promise<void> {
+    await vscode.workspace.getConfiguration("vellar-x402").update("network", network, vscode.ConfigurationTarget.Global);
+  }
+
   private async fetchWalletBalance(): Promise<WalletBalanceState> {
     const address = DataProvider.getConfiguredAddress();
     if (!address) return { kind: "unconfigured" };

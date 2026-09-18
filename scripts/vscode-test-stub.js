@@ -63,6 +63,18 @@ let configuredNetwork;
 const outputChannelLines = [];
 const notificationsShown = [];
 
+// Real event emitter (not a no-op) so a script can prove code that calls
+// vscode.workspace.getConfiguration(...).update(...) actually fires a real
+// onDidChangeConfiguration event afterward — same object real VS Code fires,
+// with a real, queryable affectsConfiguration(section) rather than a fake
+// that always/never matches, so a listener's own filtering logic (see
+// webviewProvider.ts's `e.affectsConfiguration("vellar-x402.network")`
+// check) is exercised for real, not assumed to work.
+const configChangeEmitter = new EventEmitter();
+function fireConfigChanged(section) {
+  configChangeEmitter.fire({ affectsConfiguration: (s) => s === section });
+}
+
 exports._test = {
   setPayToAddress(value) {
     configuredPayToAddress = value;
@@ -72,6 +84,15 @@ exports._test = {
   },
   resetNetwork() {
     configuredNetwork = undefined;
+  },
+  // Simulates an EXTERNAL edit (native Settings UI, a direct settings.json
+  // edit) — sets the value directly, bypassing update() entirely, then fires
+  // the same event update() itself fires below, so a test can distinguish
+  // "the toggle's own write" from "some other process changed the setting"
+  // even though both paths converge on the same event shape.
+  setNetworkExternally(value) {
+    configuredNetwork = value;
+    fireConfigChanged("vellar-x402.network");
   },
   get outputChannelLines() {
     return outputChannelLines;
@@ -88,8 +109,19 @@ exports.workspace = {
       if (section === "vellar-x402" && key === "network") return configuredNetwork ?? fallback;
       return fallback;
     },
+    // Real VS Code's update() is async (it can hit disk) — matched here so a
+    // caller that awaits it (DataProvider.setConfiguredNetwork does) is
+    // actually testing its own await, not one that would trivially "work"
+    // against a synchronous fake.
+    update: (key, value) => {
+      if (section === "vellar-x402" && key === "network") {
+        configuredNetwork = value;
+        fireConfigChanged("vellar-x402.network");
+      }
+      return Promise.resolve();
+    },
   }),
-  onDidChangeConfiguration: () => ({ dispose() {} }),
+  onDidChangeConfiguration: configChangeEmitter.event,
   onDidOpenTextDocument: () => ({ dispose() {} }),
 };
 
@@ -124,3 +156,4 @@ exports.env = {
 
 exports.ProgressLocation = { Notification: 15 };
 exports.ViewColumn = { One: 1 };
+exports.ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
