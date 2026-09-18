@@ -157,6 +157,46 @@ async function testLowercaseDeclaredMethodIsNormalized(): Promise<void> {
   assert(result.method === "POST", `lowercase "post" normalizes to POST, got ${result.method}`);
 }
 
+/**
+ * Every body-bearing verb must carry Content-Type: application/json and a
+ * {} default body — not just POST (which testCascadeFindsPostWhenGetIs404
+ * already covers). This matters against a real guard: the endpoint that
+ * motivated this feature returns 415 unsupported_media_type for a POST
+ * with no Content-Type, BEFORE its x402 middleware runs, so a probe missing
+ * that header would look exactly like "no payment gate here". PUT and PATCH
+ * reach the wire only via knownMethod (they are never blind-probed), so
+ * they are exercised that way here.
+ */
+async function testBodyVerbsAlwaysSendJsonContentType(): Promise<void> {
+  for (const verb of ["PUT", "PATCH"] as const) {
+    installFetch({ [verb]: make402() });
+
+    const result = await discoverPaymentRequirement(
+      "https://example.test/route",
+      NETWORK,
+      undefined,
+      verb as HttpMethod,
+    );
+
+    assert(result.method === verb, `${verb} resolves as ${verb}, got ${result.method}`);
+    assert(captured.length === 1, `${verb}: exactly one request was made, got ${captured.length}`);
+    assert(
+      captured[0].contentType === "application/json",
+      `${verb} sets Content-Type: application/json, got ${String(captured[0].contentType)}`,
+    );
+    assert(captured[0].body === "{}", `${verb} sends {} when no sample body is supplied, got ${String(captured[0].body)}`);
+  }
+
+  // The same guarantee must hold for a SUPPLIED body, not just the default.
+  installFetch({ PATCH: make402() });
+  await discoverPaymentRequirement("https://example.test/route", NETWORK, '{"a":1}', "PATCH" as HttpMethod);
+  assert(
+    captured[0].contentType === "application/json",
+    "PATCH with a supplied body still sets Content-Type: application/json",
+  );
+  assert(captured[0].body === '{"a":1}', "PATCH with a supplied body sends it verbatim");
+}
+
 /** knownMethod short-circuits the cascade — the ONLY way PUT/PATCH/DELETE
  *  are ever issued, since they are never blind-probed. */
 async function testKnownMethodSkipsCascade(): Promise<void> {
@@ -260,6 +300,7 @@ export async function runMethodCascadeChecks(): Promise<void> {
     await testDeclaredMethodOverridesProbe();
     await testGarbageDeclaredMethodFallsBackToProbe();
     await testLowercaseDeclaredMethodIsNormalized();
+    await testBodyVerbsAlwaysSendJsonContentType();
     await testKnownMethodSkipsCascade();
     await testDestructiveVerbsAreNeverBlindProbed();
     await testNoGateFoundError();

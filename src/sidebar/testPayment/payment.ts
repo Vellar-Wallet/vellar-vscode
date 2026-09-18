@@ -109,6 +109,14 @@ function buildRequestInit(
     // body inside their own parser, BEFORE the x402 middleware ever runs —
     // which would look exactly like "no payment gate here" to the cascade.
     body = trimmed !== undefined && trimmed !== "" ? sampleBody : "{}";
+    // Content-Type is NOT optional here, and not merely conventional: a
+    // content-type guard in front of the x402 middleware is a real, observed
+    // deployment shape. Measured against the endpoint that motivated this
+    // feature — POST with this header returns the 402 challenge; the same
+    // POST without it returns 415 unsupported_media_type
+    // ("Content-Type must be application/json") and never reaches the gate,
+    // which a probe would misread as "no payment gate on this endpoint".
+    // Applies to every body-bearing verb, not just POST.
     headers["Content-Type"] = "application/json";
   }
   return { method, body, headers: { ...headers, ...extraHeaders }, signal: AbortSignal.timeout(timeoutMs) };
