@@ -135,10 +135,44 @@ async function testClearRemovesStoredSecret(): Promise<void> {
   assert((await getMainnetFundingSecret(secrets as never)) === undefined, "clearMainnetFundingSecret removes the stored secret");
 }
 
-export async function runMainnetFundingWalletChecks(): Promise<void> {
+/**
+ * REGRESSION, source-level: the mainnet funding transaction must use
+ * createAccount, never payment.
+ *
+ * A `payment` cannot credit an account that does not yet exist on the
+ * ledger, and the throwaway wallet is generated moments before funding —
+ * so it never does. This shipped as Operation.payment and failed every real
+ * mainnet test payment with op_no_destination behind a generic "funding
+ * transaction failed", costing a live reproduction to diagnose. Friendbot
+ * does the equivalent of createAccount on testnet, which is why only the
+ * mainnet path was affected.
+ *
+ * Asserted against the REAL source text rather than behaviourally, because
+ * every harness here substitutes fake-mainnet-funding.js for this module —
+ * so no behavioural test in this repo can observe which operation the real
+ * code builds. Source-level is the same technique horizon-timeout-entry.ts
+ * uses, for the same reason: to pin a detail that fakes would hide.
+ */
+function testFundingUsesCreateAccountNotPayment(fundingSourcePath: string, source: string): void {
+  assert(
+    /Operation\.createAccount\(/.test(source),
+    `${fundingSourcePath} builds the funding tx with Operation.createAccount`,
+  );
+  assert(
+    !/Operation\.payment\(/.test(source),
+    `${fundingSourcePath} never uses Operation.payment (it cannot create a new account)`,
+  );
+  assert(
+    /startingBalance:/.test(source),
+    `${fundingSourcePath} sets createAccount's startingBalance (not payment's amount)`,
+  );
+}
+
+export async function runMainnetFundingWalletChecks(fundingSourcePath: string, fundingSource: string): Promise<void> {
   await testValidSecretIsStoredAndConfirmed();
   await testMalformedSecretIsRejected();
   await testCancelDoesNothing();
   await testGetMainnetFundingSecretUnconfiguredContract();
   await testClearRemovesStoredSecret();
+  testFundingUsesCreateAccountNotPayment(fundingSourcePath, fundingSource);
 }

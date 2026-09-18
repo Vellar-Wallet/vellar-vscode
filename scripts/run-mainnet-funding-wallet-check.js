@@ -13,6 +13,7 @@
  * No live network call anywhere in this script — Keypair.fromSecret is the
  * real @stellar/stellar-sdk function (pure, local, no network), not faked.
  */
+const fs = require("fs");
 const path = require("path");
 const esbuild = require("esbuild");
 
@@ -31,8 +32,15 @@ async function main() {
     alias: { vscode: path.join(__dirname, "vscode-test-stub.js") },
   });
 
+  // Read the REAL mainnetFunding.ts source for the createAccount regression
+  // assertion — every harness here fakes that module, so its actual built
+  // transaction can only be pinned at the source level (see the assertion's
+  // own comment).
+  const fundingSourcePath = path.join(root, "src", "sidebar", "testPayment", "mainnetFunding.ts");
+  const fundingSource = fs.readFileSync(fundingSourcePath, "utf8");
+
   const { runMainnetFundingWalletChecks } = require(outFile);
-  await runMainnetFundingWalletChecks();
+  await runMainnetFundingWalletChecks(fundingSourcePath, fundingSource);
 
   console.log("\n=== MAINNET FUNDING WALLET CHECK PASSED ===");
 }

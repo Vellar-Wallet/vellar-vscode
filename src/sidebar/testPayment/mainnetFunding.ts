@@ -24,7 +24,7 @@
  * "never throws, always resolves to a discriminated result" contract.
  */
 
-import { Asset, Horizon, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Horizon, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import type { StellarNetwork } from "../../types";
 import {
   HORIZON_URL_BY_NETWORK,
@@ -80,12 +80,26 @@ export async function fundThrowawayFromMainnetWallet(
       HORIZON_FETCH_TIMEOUT_MS,
       "mainnet funding: loadAccount",
     );
+    // REAL BUG, FOUND AND FIXED: this used to use Operation.payment, which
+    // fails with op_no_destination against a brand-new keypair. On Stellar a
+    // `payment` can only credit an account that ALREADY EXISTS on the ledger;
+    // the throwaway wallet was generated moments ago and has never been
+    // touched, so it does not. Creating it requires `createAccount`, which is
+    // precisely what friendbot does on testnet — which is why the testnet
+    // path always worked and mainnet always failed at this exact step with a
+    // generic "funding transaction failed".
+    //
+    // startingBalance (not `amount`) is createAccount's own field name for
+    // the XLM the new account is born holding. It must be at least the base
+    // reserve (1 XLM on mainnet: 2 entries x 0.5) or the operation fails with
+    // op_low_reserve; MAINNET_FUNDING_XLM_AMOUNT is comfortably above that
+    // and is also sized to cover the trustline reserve and fees the
+    // throwaway wallet needs next (see this file's own header comment).
     const tx = new TransactionBuilder(account, { fee: "1000000", networkPassphrase: PASSPHRASE_BY_NETWORK[network] })
       .addOperation(
-        Operation.payment({
+        Operation.createAccount({
           destination: throwawayPublicKey,
-          asset: Asset.native(),
-          amount: MAINNET_FUNDING_XLM_AMOUNT,
+          startingBalance: MAINNET_FUNDING_XLM_AMOUNT,
         }),
       )
       .setTimeout(SUBMIT_TIMEOUT_SECONDS)
@@ -115,6 +129,24 @@ export async function fundThrowawayFromMainnetWallet(
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes("underfunded") || message.toLowerCase().includes("insufficient")) {
       return { ok: false, reason: "the configured mainnet funding wallet doesn't have enough XLM" };
+    }
+
+    // Horizon puts the ACTIONABLE detail in extras.result_codes, never in
+    // err.message (which is only ever "Transaction submission failed. Server
+    // responded: 400 Bad Request"). Surfacing those codes is what turns an
+    // opaque "funding transaction failed" into something diagnosable without
+    // reproducing the transaction by hand — which is exactly what the
+    // op_no_destination bug above cost before this existed. These are short,
+    // enumerated protocol codes (op_no_destination, tx_insufficient_balance,
+    // op_low_reserve, ...), not raw SDK internals, and carry nothing about
+    // the funding wallet's secret.
+    const codes = (err as { response?: { data?: { extras?: { result_codes?: Record<string, unknown> } } } })?.response
+      ?.data?.extras?.result_codes;
+    if (codes) {
+      const tx = typeof codes.transaction === "string" ? codes.transaction : undefined;
+      const ops = Array.isArray(codes.operations) ? codes.operations.join(", ") : undefined;
+      const detail = [tx, ops].filter(Boolean).join(" / ");
+      if (detail) return { ok: false, reason: `funding transaction failed (${detail})` };
     }
     return { ok: false, reason: "funding transaction failed" };
   }
