@@ -50,6 +50,12 @@ const FAKE_LISTING: EndpointListing = {
   payTo: "GDIFFERENTPAYTOTHATISNOTUSED0000000000000000000000000000",
   amount: "100000",
   asset: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+  // DECLARED so the listing path skips its "resolve the unknown method"
+  // discovery call — these assertion tests are about the keypair/payTo
+  // guards, and a live probe at example.test would fail the flow long
+  // before those guards ever run. The undeclared-method path has its own
+  // dedicated test below (testListingWithNoMethodProbesBeforeFunding).
+  method: "GET",
 };
 const FAKE_TARGET: TestPaymentTarget = { kind: "listing", listing: FAKE_LISTING };
 

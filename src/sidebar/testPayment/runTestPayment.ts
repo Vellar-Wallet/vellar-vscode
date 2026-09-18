@@ -7,8 +7,16 @@
  *      the developer's OWN configured mainnet funding wallet on pubnet —
  *      see mainnetFunding.ts and mainnetFundingWallet.ts)
  *   3. Acquire USDC via the network's own DEX (trustline + DEX purchase)
- *   4-6. Build the x402 client, GET expecting 402, sign, retry with
- *        PAYMENT-SIGNATURE (see payment.ts)
+ *   4-6. Build the x402 client, request the resource expecting 402, sign,
+ *        retry with PAYMENT-SIGNATURE (see payment.ts)
+ *
+ * HTTP METHOD: the endpoint's verb is resolved BEFORE any funds move, either
+ * from the catalog listing's own declared method or by probing the endpoint's
+ * 402 challenge (see payment.ts's resolveChallenge), then threaded into
+ * runPaymentFlow so the paid request uses the verb the endpoint actually
+ * routes. A developer-supplied sample JSON body rides along for POST/PUT/
+ * PATCH, and is JSON-validated up front so malformed JSON fails free rather
+ * than after a real payment has settled.
  *
  * On stellar:pubnet specifically, two extra guards run before Step 2, in
  * order: (a) a hard ceiling refusing any endpoint priced above
@@ -54,6 +62,7 @@ import { buyUsdc, openUsdcTrustline } from "./usdc";
 import { runPaymentFlow, discoverPaymentRequirement, PaymentFlowError } from "./payment";
 import { fundThrowawayFromMainnetWallet } from "./mainnetFunding";
 import { getMainnetFundingSecret } from "./mainnetFundingWallet";
+import type { HttpMethod } from "../../types";
 
 const FUNDING_MULTIPLE = 5n;
 const GENERIC_FAILURE_MESSAGE = "Test payment failed — see the Vellar x402 output channel for details.";
@@ -86,7 +95,29 @@ const MAINNET_PRICE_CEILING_USDC_DISPLAY = "2.00";
  * real 402 challenge response, the one place they can genuinely come from
  * regardless of which path led here.
  */
-export type TestPaymentTarget = { kind: "listing"; listing: EndpointListing } | { kind: "manualUrl"; url: string };
+export type TestPaymentTarget = (
+  | { kind: "listing"; listing: EndpointListing }
+  | { kind: "manualUrl"; url: string }
+) & {
+  /**
+   * The developer's own "Sample request body (JSON)" for a POST/PUT/PATCH
+   * endpoint, typed into the sidebar. Webview-originated, so it is narrowed
+   * to `typeof === "string"` and length-capped at the message boundary (see
+   * webviewProvider's handleMessage) before it ever reaches here, and
+   * JSON-validated below before any funds move.
+   *
+   * Undefined means "none supplied" — the flow then sends `{}` for
+   * body-bearing verbs (see payment.ts's buildRequestInit), which many
+   * endpoints accept well enough to prove the x402 gate works even when
+   * their own validation then rejects the empty payload.
+   *
+   * SECURITY: this string is NEVER logged. It is not passed to
+   * logAndGenericError, never interpolated into a thrown Error's message,
+   * and never sent to progress.report — a request body can contain
+   * API keys or personal data the developer pasted while testing.
+   */
+  sampleBody?: string;
+};
 
 /**
  * Runs the full flow for one endpoint (either a known catalog listing or a
@@ -109,8 +140,34 @@ export async function runTestPayment(
     // cached, so a mid-session network switch takes effect on the next run.
     const network = DataProvider.getConfiguredNetwork();
 
+    const sampleBody = target.sampleBody;
+
+    // Fail free and loud on malformed JSON, BEFORE any funds move. The spec
+    // sends the body verbatim, and this does not change that — JSON.parse
+    // here is validation only, its result discarded; payment.ts still
+    // transmits exactly the string the developer typed. Without this, a
+    // stray trailing comma costs a real mainnet payment (up to the ceiling,
+    // plus the XLM funding and DEX fees) and returns an endpoint-side
+    // validation error indistinguishable from "the x402 gate is broken".
+    // The parse error's own text is safe to surface (it describes the
+    // developer's own syntax, e.g. position/token) — the BODY itself is
+    // never included.
+    if (sampleBody !== undefined && sampleBody.trim() !== "") {
+      try {
+        JSON.parse(sampleBody);
+      } catch (err) {
+        throw new Error(
+          `The sample request body isn't valid JSON (${err instanceof Error ? err.message : String(err)}). Fix it before running a test payment — nothing has been spent.`,
+        );
+      }
+    }
+
     let payTo: string;
     let amount: string;
+    // The verb the paid request must use. Resolved before any funds move, by
+    // whichever source can answer soonest, and threaded into runPaymentFlow
+    // so the cascade is never run (or paid for) twice.
+    let method: HttpMethod | undefined;
 
     if (target.kind === "listing") {
       if (!target.listing.payTo || !target.listing.amount) {
@@ -118,17 +175,38 @@ export async function runTestPayment(
       }
       payTo = target.listing.payTo;
       amount = target.listing.amount;
+      method = target.listing.method;
+
+      if (method === undefined) {
+        // A catalogued endpoint whose seller never declared a method. The
+        // card displays (and is gated as) GET, but GET may well be wrong —
+        // the motivating real case was a POST-only route. Resolve it now,
+        // from the endpoint's own 402, BEFORE the funding guards below:
+        // read-only, moves nothing, and makes the "the cascade will find the
+        // right method anyway" fallback actually true for this path rather
+        // than only for manual URLs. Costs zero extra requests whenever the
+        // catalog did declare a method, since this branch is skipped.
+        progress.report({ message: "Checking the endpoint's request method…", increment: 0 });
+        const discovered = await discoverPaymentRequirement(resource, network, sampleBody);
+        method = discovered.method;
+      }
     } else {
-      // Manual URL: no catalog entry exists yet, so payTo/amount are
+      // Manual URL: no catalog entry exists yet, so payTo/amount/method are
       // discovered live from the endpoint's own 402 challenge — never
       // assumed, never taken from anything the webview sent alongside the
-      // URL (it sent nothing alongside it; the URL is the only input).
-      // Read-only (a GET expecting a 402), so this runs regardless of
-      // network — it moves no funds, unlike everything below it.
+      // URL (it sent only the URL and an optional sample body, neither of
+      // which claims a price or a payee).
+      //
+      // The probes move no funds — no payment header is attached to any of
+      // them — but they are NOT merely read-only: a POST probe is a real
+      // write request to a host the developer typed by hand. See
+      // payment.ts's BLIND_PROBE_METHODS for why the blind cascade stops at
+      // GET and POST rather than trying every verb.
       progress.report({ message: "Checking the endpoint's payment requirement…", increment: 0 });
-      const discovered = await discoverPaymentRequirement(target.url, network);
+      const discovered = await discoverPaymentRequirement(target.url, network, sampleBody);
       payTo = discovered.payTo;
       amount = discovered.amount;
+      method = discovered.method;
     }
 
     // Two mainnet-only guards, both run BEFORE Step 1 even generates the
@@ -238,13 +316,23 @@ export async function runTestPayment(
 
     // Steps 4-6: the real x402 payment flow.
     progress.report({ message: "Requesting the endpoint (expecting 402)…", increment: 15 });
-    const result = await runPaymentFlow(throwawaySecret, resource, network, (event) => {
-      if (event.step === "sign") {
-        progress.report({ message: "Signing the payment…", increment: 15 });
-      } else if (event.step === "settle") {
-        progress.report({ message: "Submitting payment to the endpoint…", increment: 15 });
-      }
-    });
+    const result = await runPaymentFlow(
+      throwawaySecret,
+      resource,
+      network,
+      (event) => {
+        if (event.step === "sign") {
+          progress.report({ message: "Signing the payment…", increment: 15 });
+        } else if (event.step === "settle") {
+          progress.report({ message: "Submitting payment to the endpoint…", increment: 15 });
+        }
+      },
+      sampleBody,
+      // Always defined by this point — both branches above resolve it — so
+      // runPaymentFlow's own cascade never re-runs. Passing it is what makes
+      // the paid request use the verb the endpoint actually routes.
+      method,
+    );
 
     progress.report({ message: "Payment settled.", increment: 25 });
     return result.settlementTx;

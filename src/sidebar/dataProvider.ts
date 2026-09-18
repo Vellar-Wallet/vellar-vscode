@@ -4,7 +4,7 @@ import { formatAtomicUsdc, looksLikeStellarGAddress, truncateMiddle } from "./fo
 import { checkEndpointNotifications, checkSettlementNotifications } from "./notifications";
 import { logAndGenericError } from "./outputChannel";
 import { PollingSource } from "./polling";
-import type { StellarNetwork } from "../types";
+import { readBazaarMethod, type HttpMethod, type StellarNetwork } from "../types";
 
 const DEFAULT_NETWORK: StellarNetwork = "stellar:pubnet";
 
@@ -116,6 +116,17 @@ interface DiscoveryItem {
   resource: string;
   accepts: DiscoveryAccept[];
   trust: DiscoveryTrust;
+  /**
+   * The seller's own Bazaar declaration blob, when they declared one. The
+   * HTTP method lives at `extensions.bazaar.info.input.method` — a TOP-LEVEL
+   * sibling of `accepts`, NOT inside an accepts[] entry (confirmed against a
+   * live response: accepts entries carry only
+   * amount/asset/extra/maxTimeoutSeconds/network/payTo/scheme). Untyped
+   * because it is a seller-authored, facilitator-relayed blob whose shape
+   * this extension does not control — readBazaarMethod does the safe
+   * narrowing.
+   */
+  extensions?: Record<string, unknown>;
 }
 interface DiscoveryResponse {
   items: DiscoveryItem[];
@@ -144,6 +155,20 @@ export interface EndpointListing {
   payTo: string | undefined;
   amount: string | undefined;
   asset: string | undefined;
+  /**
+   * The endpoint's own declared HTTP method, from the discovery catalog's
+   * `extensions.bazaar.info.input.method`. OPTIONAL (not `HttpMethod |
+   * undefined`) because it is genuinely sometimes-absent upstream data — a
+   * seller who never declared the Bazaar extension has no method to report —
+   * which is exactly what `?` encodes, unlike payTo/amount/asset above where
+   * the mapper always produces a value that may happen to be undefined.
+   *
+   * Consumers treat undefined as GET: the card hides its sample-body input
+   * (see webviewProvider's renderEndpoints) and runTestPayment lets the
+   * discovery cascade resolve the real verb at click time, so an undeclared
+   * POST endpoint still works — it just isn't known to be POST in advance.
+   */
+  method?: HttpMethod;
 }
 
 export type EndpointsState = { kind: "unconfigured" } | { kind: "loaded"; listings: EndpointListing[] };
@@ -491,6 +516,13 @@ export class DataProvider implements vscode.Disposable {
           payTo: accept?.payTo,
           amount: accept?.amount,
           asset: accept?.asset,
+          // Read off the ITEM, not the network-matched accept — see
+          // DiscoveryItem.extensions' own comment for why this nesting level
+          // is the only one that exists. readBazaarMethod (types.ts) maps any
+          // unrecognized or malformed value to undefined, so a catalog entry
+          // declaring "TRACE", 42, or a nested object can never reach fetch()
+          // as a method; undefined then reads as GET downstream.
+          method: readBazaarMethod(item.extensions),
         };
       });
 

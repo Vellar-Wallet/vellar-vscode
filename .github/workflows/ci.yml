@@ -117,3 +117,9 @@ jobs:
 
       - name: Run mainnet funding wallet check
         run: node scripts/run-mainnet-funding-wallet-check.js
+
+      - name: Run HTTP method cascade check
+        run: node scripts/run-method-cascade-check.js
+
+      - name: Run sample request body check
+        run: node scripts/run-sample-body-check.js

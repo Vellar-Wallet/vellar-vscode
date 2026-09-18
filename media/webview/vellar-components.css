@@ -310,6 +310,79 @@ body {
   align-self: flex-start;
 }
 
+/* The sample-request-body textarea. Shares the .test-url-input-frame border
+   trick above (see its own REAL BUG comment for why the border is a painted
+   background rather than a box-shadow) — a <textarea> has the same
+   can't-render-::before-over-native-text-box limitation a plain <input>
+   does, so it sits transparent on top of the frame's fill exactly like the
+   URL input. resize:vertical only: horizontal resize would let it escape a
+   narrow sidebar's width. */
+.body-input {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  padding: 0.6em 0.8em;
+  outline: none;
+  resize: vertical;
+}
+.body-input::placeholder {
+  color: var(--ink-faint);
+}
+
+/* The honest-limitation note under the activate form. Deliberately quiet
+   (ink-faint, small) — it is guidance, not a warning: nothing is broken if
+   a developer skips the body, the payment still settles. */
+.body-hint {
+  margin: var(--sp-2) 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+/* A card's own optional body field, only rendered for POST/PUT/PATCH
+   listings. Inset slightly from the card's other rows so it reads as a
+   secondary, optional input rather than a primary piece of card data. */
+.card-body-field {
+  position: relative;
+  background: var(--line);
+  clip-path: var(--clip-br-sm);
+  margin: var(--sp-2) 0;
+}
+.card-body-field::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--paper-tint);
+  clip-path: var(--clip-br-sm-in1);
+}
+.card-body-field:focus-within {
+  background: var(--ink);
+}
+
+/* The verb chip on a non-GET card. Reuses the badge's flat clip-cut fill
+   language but in the neutral --line tone: the method is informational, not
+   a trust signal like .badge--verified, and must not compete with it. */
+.method-tag {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.25em 0.55em;
+  background: var(--line);
+  color: var(--ink-soft);
+  clip-path: var(--clip-br-sm);
+}
+
 /* My Endpoints' "Activate endpoint" form — ALWAYS rendered (see
    renderEndpoints' own comment), not just in the empty state, so this
    wrapper needs its own separation from whatever sits above it: the

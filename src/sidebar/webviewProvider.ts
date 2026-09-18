@@ -11,7 +11,7 @@ import { formatDecimalAmount, looksLikeTestableResourceUrl, truncateMiddle } fro
 import { logAndGenericError } from "./outputChannel";
 import { FocusVisibilityGate } from "./polling";
 import { runTestPayment, type TestPaymentTarget } from "./testPayment/runTestPayment";
-import type { StellarNetwork } from "../types";
+import type { HttpMethod, StellarNetwork } from "../types";
 
 /**
  * The sidebar's single webview. `retainContextWhenHidden: false` (required) means
@@ -205,7 +205,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
    * other section already uses. payTo/amount/asset are extension-host-only
    * fields now, in the sense that they never reach this postMessage call —
    * the webview's own render function never read them anyway (it only uses
-   * resource/priceLabel/ownershipState/settlements/lastSettled).
+   * resource/priceLabel/ownershipState/settlements/lastSettled/method).
    */
   private postEndpointsUpdate(state: import("./polling").PollResult<EndpointsState>): void {
     void this.view?.webview.postMessage({ type: "endpoints", state: toEndpointsDisplayState(state) });
@@ -370,12 +370,16 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     }
     if (msg.type === "testPayment") {
       const resource = (message as { resource?: unknown }).resource;
-      if (typeof resource === "string") void this.startTestPaymentForListing(resource);
+      if (typeof resource === "string") {
+        void this.startTestPaymentForListing(resource, narrowSampleBody(message));
+      }
       return;
     }
     if (msg.type === "testManualUrl") {
       const url = (message as { url?: unknown }).url;
-      if (typeof url === "string") void this.startTestPaymentForManualUrl(url);
+      if (typeof url === "string") {
+        void this.startTestPaymentForManualUrl(url, narrowSampleBody(message));
+      }
       return;
     }
     if (msg.type === "settlementsPage") {
@@ -426,13 +430,18 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
    * on every endpoint card) and runs the full throwaway test-payment flow
    * against it inside a VS Code progress notification.
    */
-  private async startTestPaymentForListing(resource: string): Promise<void> {
+  private async startTestPaymentForListing(resource: string, sampleBody: string | undefined): Promise<void> {
     const endpoints = this.dataProvider.endpoints.current;
     if (endpoints.status !== "ok" || endpoints.data.kind !== "loaded") return;
     const listing = endpoints.data.listings.find((l) => l.resource === resource);
     if (!listing) return; // stale click against a listing that's no longer in the current poll
 
-    await this.runTestPaymentFlow({ kind: "listing", listing }, listing.resource);
+    // `resource` stays purely a LOOKUP KEY — the listing (and therefore its
+    // payTo/amount/method) always comes from the extension host's own current
+    // poll data, never from the webview. sampleBody is the one genuinely
+    // webview-authored value in this path, already narrowed and length-capped
+    // by narrowSampleBody at the message boundary.
+    await this.runTestPaymentFlow({ kind: "listing", listing, sampleBody }, listing.resource);
   }
 
   /**
@@ -451,14 +460,14 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
    *    endpoint's own real 402 challenge, the one place they can genuinely
    *    come from regardless of how untrusted the URL that produced them is.
    */
-  private async startTestPaymentForManualUrl(url: string): Promise<void> {
+  private async startTestPaymentForManualUrl(url: string, sampleBody: string | undefined): Promise<void> {
     if (!looksLikeTestableResourceUrl(url)) {
       void vscode.window.showErrorMessage(
         "That doesn't look like a testable URL — use https://, or http:// on localhost/127.0.0.1 for local development.",
       );
       return;
     }
-    await this.runTestPaymentFlow({ kind: "manualUrl", url }, url);
+    await this.runTestPaymentFlow({ kind: "manualUrl", url, sampleBody }, url);
   }
 
   private async runTestPaymentFlow(target: TestPaymentTarget, resourceForTitle: string): Promise<void> {
@@ -728,6 +737,85 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     return \`\${d} day\${d === 1 ? "" : "s"} ago\`;
   }
 
+  // Verbs that carry a body — mirrors BODY_METHODS in src/types.ts. The
+  // webview's inline script cannot import across the host/webview boundary
+  // (same constraint relativeTime() above is duplicated for), so this is a
+  // deliberate, minimal duplication rather than a missed reuse.
+  const BODY_METHOD_SET = new Set(["POST", "PUT", "PATCH"]);
+
+  /** Escapes a value for safe use inside an attribute selector. A resource
+   *  URL contains ":" and "/" (and may contain quotes), all of which would
+   *  otherwise break or alter the selector. CSS.escape is available in the
+   *  webview's Chromium, with a conservative manual fallback. */
+  function cssEscape(value) {
+    if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+    return String(value).replace(/["\\\\]/g, "\\\\$&");
+  }
+
+  /**
+   * renderEndpoints() rebuilds the whole list via innerHTML on EVERY
+   * endpoints message — a 60s poll tick, a visibility change, a network
+   * toggle, and every settled payment all trigger one. That silently wiped
+   * anything typed into a card's body textarea mid-edit. These two helpers
+   * snapshot the current values before the rebuild and restore them
+   * afterward, keyed by the same resource URL the Test button already uses,
+   * so a developer's half-typed JSON survives a poll landing under their
+   * cursor. Focus (and the caret) is restored too, since losing those
+   * mid-keystroke is just as disruptive as losing the text.
+   */
+  function snapshotCardBodies() {
+    const values = new Map();
+    let focusedKey;
+    let selectionStart;
+    let selectionEnd;
+    endpointsRoot.querySelectorAll("[data-body-for]").forEach((el) => {
+      if (el.value !== "") values.set(el.dataset.bodyFor, el.value);
+      if (el === document.activeElement) {
+        focusedKey = el.dataset.bodyFor;
+        selectionStart = el.selectionStart;
+        selectionEnd = el.selectionEnd;
+      }
+    });
+    return { values, focusedKey, selectionStart, selectionEnd };
+  }
+
+  function restoreCardBodies(snapshot) {
+    endpointsRoot.querySelectorAll("[data-body-for]").forEach((el) => {
+      const saved = snapshot.values.get(el.dataset.bodyFor);
+      // Assigned as a VALUE, never interpolated into the innerHTML string
+      // above — the developer's JSON is data, not markup.
+      if (saved !== undefined) el.value = saved;
+      if (snapshot.focusedKey !== undefined && el.dataset.bodyFor === snapshot.focusedKey) {
+        el.focus();
+        if (snapshot.selectionStart !== undefined) {
+          el.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+        }
+      }
+    });
+  }
+
+  /** Same wipe problem for the manual form's own two inputs, which live in
+   *  the same innerHTML rebuild. */
+  function snapshotManualForm() {
+    const urlEl = document.getElementById("test-url-input");
+    const bodyEl = document.getElementById("test-body-input");
+    return {
+      url: urlEl ? urlEl.value : "",
+      body: bodyEl ? bodyEl.value : "",
+      urlFocused: urlEl === document.activeElement,
+      bodyFocused: bodyEl === document.activeElement,
+    };
+  }
+
+  function restoreManualForm(snapshot) {
+    const urlEl = document.getElementById("test-url-input");
+    const bodyEl = document.getElementById("test-body-input");
+    if (urlEl && snapshot.url) urlEl.value = snapshot.url;
+    if (bodyEl && snapshot.body) bodyEl.value = snapshot.body;
+    if (urlEl && snapshot.urlFocused) urlEl.focus();
+    else if (bodyEl && snapshot.bodyFocused) bodyEl.focus();
+  }
+
   function renderEndpoints(state) {
     if (state.status === "loading") {
       endpointsRoot.innerHTML = '<div class="empty-state">Loading…</div>';
@@ -767,10 +855,22 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           <div class="test-url-input-frame">
             <input type="text" id="test-url-input" class="mono" placeholder="https://your-endpoint.example.com/route" />
           </div>
+          <div class="test-url-input-frame">
+            <textarea id="test-body-input" class="mono body-input" rows="3" placeholder='Sample request body (JSON), e.g. {"topic":"perseverance"}'></textarea>
+          </div>
           <button class="btn btn--outline" id="test-url-submit">Activate endpoint</button>
         </div>
+        <p class="body-hint">For POST endpoints, provide a sample request body so the endpoint
+        can process the request after payment settles. Without a body the payment will settle
+        but the endpoint may return a validation error.</p>
       </div>
     \`;
+
+    // Captured BEFORE either innerHTML assignment below wipes the DOM these
+    // values live in; restored immediately after. See snapshotCardBodies'
+    // own comment for why this matters on a 60s poll.
+    const cardSnapshot = snapshotCardBodies();
+    const manualSnapshot = snapshotManualForm();
 
     if (data.listings.length === 0) {
       endpointsRoot.innerHTML = \`
@@ -790,16 +890,37 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
             listing.lastSettled === undefined
               ? "never settled"
               : \`last settled \${relativeTime(listing.lastSettled)}\`;
+          // Only body-bearing verbs get the input. An undeclared method
+          // (undefined) reads as GET and shows nothing — the discovery
+          // cascade still resolves the real verb at click time, so an
+          // undeclared POST endpoint keeps working, it just doesn't offer a
+          // body field until its seller declares the method.
+          const showBody = BODY_METHOD_SET.has(listing.method);
+          const methodTag = listing.method && listing.method !== "GET"
+            ? \`<span class="method-tag">\${escapeHtml(listing.method)}</span>\`
+            : "";
+          // Rendered EMPTY, never with an interpolated value — restoring a
+          // previous value happens via .value assignment after insertion
+          // (see restoreCardBodies), so a developer's JSON can never be
+          // re-parsed as HTML on a later render.
+          const bodyFieldHtml = showBody
+            ? \`<div class="card-body-field">
+                 <textarea class="mono body-input" rows="2" data-body-for="\${escapeHtml(listing.resource)}"
+                   placeholder='Sample request body (JSON)'></textarea>
+               </div>\`
+            : "";
           return \`
           <div class="endpoint-card">
             <a class="resource-link mono" href="\${escapeHtml(listing.resource)}" target="_blank" rel="noreferrer">\${escapeHtml(listing.resource)}</a>
             <div class="meta-row">
               <span class="price">\${escapeHtml(listing.priceLabel)}</span>
+              \${methodTag}
               <span class="badge badge--\${listing.ownershipState}">\${escapeHtml(BADGE_LABEL[listing.ownershipState] ?? "Unknown")}</span>
             </div>
+            \${bodyFieldHtml}
             <div class="stats-row">
               <span>\${listing.settlements} settlement\${listing.settlements === 1 ? "" : "s"} · \${escapeHtml(settledLine)}</span>
-              <button class="btn btn--outline" data-test-resource="\${escapeHtml(listing.resource)}" title="Fire a real testnet payment against this endpoint">Test</button>
+              <button class="btn btn--outline" data-test-resource="\${escapeHtml(listing.resource)}" title="Fire a real payment against this endpoint">Test</button>
             </div>
           </div>
         \`;
@@ -813,14 +934,25 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       \`;
     }
 
+    // Restore what the rebuild above just wiped, before any listener is
+    // attached — so a value restored here is already in place if the
+    // developer immediately clicks Test.
+    restoreCardBodies(cardSnapshot);
+    restoreManualForm(manualSnapshot);
+
     // Wired unconditionally — the form above is always in the DOM now
     // (empty-state or listings-present branch alike), so this listener
     // attachment no longer needs its own early "return" the way the old
     // empty-state-only branch did.
     const input = document.getElementById("test-url-input");
+    const bodyInput = document.getElementById("test-body-input");
     document.getElementById("test-url-submit").addEventListener("click", () => {
       const url = input.value.trim();
-      if (url) vscode.postMessage({ type: "testManualUrl", url });
+      const sampleBody = bodyInput ? bodyInput.value : "";
+      // sampleBody is sent as typed (not trimmed to undefined here) — the
+      // host's own narrowSampleBody decides what counts as "none supplied",
+      // so that rule lives in exactly one place, on the trusted side.
+      if (url) vscode.postMessage({ type: "testManualUrl", url, sampleBody });
     });
 
     // The resource URL is the lookup key posted back to the extension host,
@@ -828,9 +960,17 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     // resource URL is the same stable identity the card already displays.
     // Nothing sensitive in this round-trip: it's the exact string already
     // visible, unmodified, in the anchor tag right next to this button.
+    // sampleBody rides alongside it for POST/PUT/PATCH cards; GET cards have
+    // no textarea to read, so it goes as "" and the host reads that as none.
     endpointsRoot.querySelectorAll("[data-test-resource]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        vscode.postMessage({ type: "testPayment", resource: btn.dataset.testResource });
+        const resource = btn.dataset.testResource;
+        const cardBody = endpointsRoot.querySelector('[data-body-for="' + cssEscape(resource) + '"]');
+        vscode.postMessage({
+          type: "testPayment",
+          resource,
+          sampleBody: cardBody ? cardBody.value : "",
+        });
       });
     });
   }
@@ -988,13 +1128,48 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
 }
 
 /**
+ * Upper bound on a webview-supplied sample request body. The webview can post
+ * an arbitrarily large string, and this one ends up as a real HTTP request
+ * body — 64KB is far beyond any plausible hand-pasted test payload while
+ * still bounding what a runaway/hostile webview could push through.
+ */
+const MAX_SAMPLE_BODY_BYTES = 64 * 1024;
+
+/**
+ * Narrows a webview message's `sampleBody` to a plain string of bounded
+ * length, or undefined — the same "never trust the webview's payload beyond
+ * a known-safe shape" rule every other handler in handleMessage follows for
+ * its own fields (resource/url/direction/network). Anything that isn't a
+ * string (number, object, array, null, absent) becomes undefined rather than
+ * being forwarded, and an over-long string is rejected outright rather than
+ * silently truncated — a half-body would be invalid JSON anyway, and failing
+ * loudly is better than sending a corrupted payload to a paid endpoint.
+ *
+ * Exported for the acceptance harness, which asserts each of those cases
+ * directly rather than inferring them from downstream behavior.
+ */
+export function narrowSampleBody(message: unknown): string | undefined {
+  const raw = (message as { sampleBody?: unknown }).sampleBody;
+  if (typeof raw !== "string") return undefined;
+  if (raw.length > MAX_SAMPLE_BODY_BYTES) return undefined;
+  return raw.trim() === "" ? undefined : raw;
+}
+
+/**
  * Strips EndpointListing down to exactly the fields the webview's own
  * renderEndpoints() reads (resource, priceLabel, ownershipState, settlements,
- * lastSettled) — payTo/amount/asset are extension-host-only fields
+ * lastSettled, method) — payTo/amount/asset are extension-host-only fields
  * (runTestPayment's own assertion + funding-target math need them; the
  * webview render function never did). See postEndpointsUpdate's own comment
  * for why this function exists: it didn't, for two steps, and that was a
  * real leak.
+ *
+ * `method` was added deliberately to this allowlist, and is display-safe in a
+ * way payTo/amount/asset are not: it is an HTTP verb from a public catalog,
+ * carries no address or amount, and the card genuinely needs it to decide
+ * whether to render a sample-body input (POST/PUT/PATCH only). It is already
+ * narrowed to the five known verbs by readBazaarMethod at the dataProvider
+ * boundary, so no unvalidated string reaches the webview here.
  */
 export function toEndpointsDisplayState(
   state: import("./polling").PollResult<EndpointsState>,
@@ -1008,6 +1183,7 @@ export function toEndpointsDisplayState(
         ownershipState: "verified" | "proven-unconfirmed" | "unverified" | "unknown";
         settlements: number;
         lastSettled: string | undefined;
+        method: HttpMethod | undefined;
       }[];
     }
 > {
@@ -1024,6 +1200,7 @@ export function toEndpointsDisplayState(
         ownershipState: listing.ownershipState,
         settlements: listing.settlements,
         lastSettled: listing.lastSettled,
+        method: listing.method,
       })),
     },
   };

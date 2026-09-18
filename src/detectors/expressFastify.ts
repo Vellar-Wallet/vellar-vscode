@@ -1,6 +1,4 @@
-import type { DetectedRoute, Framework, HttpMethod } from "../types";
-
-const HTTP_METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+import { HTTP_METHODS, type DetectedRoute, type Framework, type HttpMethod } from "../types";
 
 /**
  * Matches `app.get(...)`, `router.post(...)`, `fastify.put(...)`, `server.patch(...)`, etc.

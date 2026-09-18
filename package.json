@@ -90,6 +90,7 @@
     "package": "node esbuild.js --production",
     "typecheck": "tsc --noEmit -p ./ && tsc --noEmit -p ./scripts",
     "pretest": "npm run compile && npm run typecheck",
+    "test": "for f in scripts/run-*-check.js scripts/run-acceptance-test.js; do echo \"--- $f\" && node \"$f\" || exit 1; done",
     "vscode:prepublish": "npm run package",
     "vsce-package": "npm run package && vsce package"
   },

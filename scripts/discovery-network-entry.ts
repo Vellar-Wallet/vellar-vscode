@@ -103,8 +103,12 @@ async function testSelectsPubnetEntryWhenConfiguredForPubnet(): Promise<void> {
     const state = await waitForFirstLoadedResult(dataProvider);
     assert(state.kind === "loaded", "endpoints state is loaded");
     if (state.kind !== "loaded") return;
-    assert(state.listings.length === 1, `exactly one listing is returned, got ${state.listings.length}`);
-    const listing = state.listings[0];
+    // Selected by resource, not by index/count: the fixture also carries
+    // method-parsing items (see testCatalogMethodParsing) that share this
+    // same pubnet payTo and therefore legitimately appear here too.
+    const listing = state.listings.find((l) => l.resource === "https://vellar-seller-demo.onrender.com/quote");
+    assert(listing !== undefined, "the dual-network /quote listing is present");
+    if (listing === undefined) return;
     assert(listing.payTo === TEST_ADDRESS_PUBNET_PAYTO, "selected entry's payTo is the PUBNET accept's payTo");
     assert(listing.amount === "2500000", `selected entry's amount is the pubnet accept's amount, got ${listing.amount}`);
     assert(
@@ -116,7 +120,49 @@ async function testSelectsPubnetEntryWhenConfiguredForPubnet(): Promise<void> {
   }
 }
 
+/**
+ * The catalog's declared HTTP method, parsed off each item's own
+ * extensions.bazaar.info.input.method (a sibling of accepts, NOT inside an
+ * accepts entry). Three cases in one pass, since all three fixture items
+ * share the pubnet payTo and therefore all survive fetchEndpoints' filter:
+ * a real declared POST, a seller who declared nothing, and a declared verb
+ * outside the five known ones.
+ */
+async function testCatalogMethodParsing(): Promise<void> {
+  vscodeTest.setNetwork("stellar:pubnet");
+  vscodeTest.setPayToAddress(TEST_ADDRESS_PUBNET_PAYTO);
+  const dataProvider = new DataProvider(new FakeMemento() as never);
+  try {
+    const state = await waitForFirstLoadedResult(dataProvider);
+    assert(state.kind === "loaded", "endpoints state is loaded");
+    if (state.kind !== "loaded") return;
+
+    const byResource = new Map(state.listings.map((l) => [l.resource, l]));
+
+    const declared = byResource.get("https://vellar-seller-demo.onrender.com/quote");
+    assert(declared !== undefined, "the declared-POST listing is present");
+    assert(declared?.method === "POST", `a declared POST surfaces as method "POST", got ${String(declared?.method)}`);
+
+    const undeclared = byResource.get("https://vellar-seller-demo.onrender.com/undeclared");
+    assert(undeclared !== undefined, "the undeclared-method listing is present");
+    assert(
+      undeclared?.method === undefined,
+      `a listing with no bazaar extension has method undefined, got ${String(undeclared?.method)}`,
+    );
+
+    const garbage = byResource.get("https://vellar-seller-demo.onrender.com/garbage-method");
+    assert(garbage !== undefined, "the garbage-method listing is present");
+    assert(
+      garbage?.method === undefined,
+      `a declared "TRACE" is rejected to undefined, never passed through, got ${String(garbage?.method)}`,
+    );
+  } finally {
+    dataProvider.dispose();
+  }
+}
+
 export async function runDiscoveryNetworkChecks(): Promise<void> {
   await testSelectsTestnetEntryWhenConfiguredForTestnet();
   await testSelectsPubnetEntryWhenConfiguredForPubnet();
+  await testCatalogMethodParsing();
 }
