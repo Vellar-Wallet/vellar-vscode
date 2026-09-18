@@ -94,6 +94,9 @@ exports._test = {
     configuredNetwork = value;
     fireConfigChanged("vellar-x402.network");
   },
+  setNextInputBoxValue(value) {
+    nextInputBoxValue = value;
+  },
   get outputChannelLines() {
     return outputChannelLines;
   },
@@ -125,6 +128,12 @@ exports.workspace = {
   onDidOpenTextDocument: () => ({ dispose() {} }),
 };
 
+// The NEXT value showInputBox resolves to — a script sets this immediately
+// before triggering whatever code calls showInputBox, same
+// "test-controlled, reset per script run" spirit as configuredPayToAddress
+// above. undefined models the user pressing Escape (cancel).
+let nextInputBoxValue;
+
 exports.window = {
   createOutputChannel: () => ({
     appendLine: (line) => outputChannelLines.push(line),
@@ -138,6 +147,7 @@ exports.window = {
     notificationsShown.push(text);
     return Promise.resolve(undefined);
   },
+  showInputBox: () => Promise.resolve(nextInputBoxValue),
   withProgress: async (_options, task) => {
     const progress = { report: () => {} };
     const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
@@ -157,3 +167,32 @@ exports.env = {
 exports.ProgressLocation = { Notification: 15 };
 exports.ViewColumn = { One: 1 };
 exports.ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
+
+// Real SecretStorage fake — an in-memory Map, not a no-op — so a script can
+// prove code that calls secrets.store/get/delete actually round-trips a
+// value, the same "real behavior, not a stub that always/never matches"
+// standard the config-change emitter above already holds itself to. A
+// FACTORY (not a single shared module-level instance) since a test script
+// may construct several independent providers/DataProviders in the same
+// process (see network-toggle-entry.ts's own per-test setup()) and each
+// should get its own isolated secret store, exactly like a real extension's
+// context.secrets is scoped per-extension-install, not shared globally.
+exports._test.createFakeSecretStorage = function createFakeSecretStorage() {
+  const store = new Map();
+  const changeEmitter = new EventEmitter();
+  return {
+    get: (key) => Promise.resolve(store.get(key)),
+    store: (key, value) => {
+      store.set(key, value);
+      changeEmitter.fire({ key });
+      return Promise.resolve();
+    },
+    delete: (key) => {
+      store.delete(key);
+      changeEmitter.fire({ key });
+      return Promise.resolve();
+    },
+    keys: () => Promise.resolve([...store.keys()]),
+    onDidChange: changeEmitter.event,
+  };
+};

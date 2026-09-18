@@ -9,12 +9,17 @@
  *   2. Does NOT throw (proceeds to call fundWithFriendbot and beyond), when
  *      they genuinely differ.
  *
- * No live network call anywhere in this script — fundWithFriendbot and the
- * USDC trustline/purchase functions are faked (see fake-friendbot.js,
- * fake-usdc.js) so this runs fast and deterministically in CI, matching this
- * repo's other acceptance scripts. runTestPayment.ts's own source is
- * completely unmodified; only its three real dependencies (friendbot, usdc,
- * and — via monkey-patch, not a redirect — Keypair.random) are substituted.
+ * No live network call anywhere in this script — fundWithFriendbot, the
+ * USDC trustline/purchase functions, and fundThrowawayFromMainnetWallet are
+ * all faked (see fake-friendbot.js, fake-usdc.js, fake-mainnet-funding.js)
+ * so this runs fast and deterministically in CI, matching this repo's other
+ * acceptance scripts. runTestPayment.ts's own source is completely
+ * unmodified; only its four real dependencies (friendbot, usdc,
+ * mainnetFunding, and — via monkey-patch, not a redirect — Keypair.random)
+ * are substituted. getMainnetFundingSecret is NOT faked — it's exercised
+ * for real against vscode-test-stub.js's own real (in-memory) SecretStorage
+ * fake, so the mainnet test cases prove the actual configured/not-configured
+ * read path, not a third layer of mocking on top of it.
  */
 const path = require("path");
 const esbuild = require("esbuild");
@@ -45,6 +50,12 @@ async function main() {
           build.onResolve({ filter: /^\.\/usdc$/ }, (args) => {
             if (args.importer.endsWith(path.join("sidebar", "testPayment", "runTestPayment.ts"))) {
               return { path: path.join(__dirname, "fake-usdc.js") };
+            }
+            return undefined;
+          });
+          build.onResolve({ filter: /^\.\/mainnetFunding$/ }, (args) => {
+            if (args.importer.endsWith(path.join("sidebar", "testPayment", "runTestPayment.ts"))) {
+              return { path: path.join(__dirname, "fake-mainnet-funding.js") };
             }
             return undefined;
           });

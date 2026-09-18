@@ -46,7 +46,12 @@ export const HORIZON_URL_BY_NETWORK: Record<StellarNetwork, string> = {
   "stellar:testnet": "https://horizon-testnet.stellar.org",
   "stellar:pubnet": "https://horizon.stellar.org",
 };
-const PASSPHRASE_BY_NETWORK: Record<StellarNetwork, string> = {
+// Exported (read-only, no behavior change) so
+// mainnetFunding.ts can build a real classic Payment transaction with the
+// correct network passphrase — same reasoning as HORIZON_URL_BY_NETWORK and
+// USDC_ISSUER_BY_NETWORK just above, kept private until a real second
+// consumer needed it.
+export const PASSPHRASE_BY_NETWORK: Record<StellarNetwork, string> = {
   "stellar:testnet": Networks.TESTNET,
   "stellar:pubnet": Networks.PUBLIC,
 };

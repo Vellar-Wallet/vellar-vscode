@@ -22,10 +22,18 @@ import { DataProvider } from "../src/sidebar/dataProvider";
 import { Uri } from "vscode";
 import { FakeMemento } from "./fake-memento";
 
+interface FakeSecretStorage {
+  get(key: string): Promise<string | undefined>;
+  store(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+  keys(): Promise<string[]>;
+  onDidChange: unknown;
+}
 interface VscodeTestNamespace {
   setPayToAddress(value: string): void;
   setNetwork(value: string): void;
   setNetworkExternally(value: string): void;
+  createFakeSecretStorage(): FakeSecretStorage;
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const vscodeTest = require("./vscode-test-stub")._test as VscodeTestNamespace;
@@ -64,7 +72,11 @@ function setup() {
     return originalSettlementsRefresh();
   };
 
-  const provider = new VellarSidebarProvider(Uri.joinPath({ path: "/fake/ext" } as never, ""), dataProvider);
+  const provider = new VellarSidebarProvider(
+    Uri.joinPath({ path: "/fake/ext" } as never, ""),
+    dataProvider,
+    vscodeTest.createFakeSecretStorage() as never,
+  );
 
   const posted: { type?: string; [key: string]: unknown }[] = [];
   let receivedMessageHandler: ((message: unknown) => void) | undefined;

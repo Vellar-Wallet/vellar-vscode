@@ -25,9 +25,17 @@ const paymentsFake = require("./fake-https-client-paginated") as {
   paymentsCalls: string[];
 };
 
+interface FakeSecretStorage {
+  get(key: string): Promise<string | undefined>;
+  store(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+  keys(): Promise<string[]>;
+  onDidChange: unknown;
+}
 interface VscodeTestNamespace {
   setPayToAddress(value: string): void;
   outputChannelLines: string[];
+  createFakeSecretStorage(): FakeSecretStorage;
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const vscodeTest = require("./vscode-test-stub")._test as VscodeTestNamespace;
@@ -72,7 +80,11 @@ export function createHarness(initialPage1Response: unknown): {
   paymentsFake.queuePaymentsResponse(initialPage1Response);
 
   const dataProvider = new DataProvider(new FakeMemento() as never);
-  const provider = new VellarSidebarProvider(Uri.joinPath({ path: "/fake/ext" } as never, ""), dataProvider);
+  const provider = new VellarSidebarProvider(
+    Uri.joinPath({ path: "/fake/ext" } as never, ""),
+    dataProvider,
+    vscodeTest.createFakeSecretStorage() as never,
+  );
 
   const postedSettlementsMessages: { state: unknown; pagination: unknown }[] = [];
   let capturedMessageHandler: ((message: unknown) => void) | undefined;

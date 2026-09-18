@@ -38,6 +38,10 @@
       {
         "command": "vellar-x402.reopenOnboarding",
         "title": "Vellar: Reopen getting started"
+      },
+      {
+        "command": "vellar-x402.configureMainnetTestWallet",
+        "title": "Vellar: Configure mainnet test wallet"
       }
     ],
     "configuration": {

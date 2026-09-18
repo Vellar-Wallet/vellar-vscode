@@ -3,15 +3,20 @@
  * network vellar-x402.network currently names (read once, live, at the top
  * of runTestPayment — see DataProvider.getConfiguredNetwork()):
  *   1. Generate keypair (in memory only)
- *   2. Fund via friendbot
+ *   2. Fund the throwaway wallet with real/test XLM (friendbot on testnet;
+ *      the developer's OWN configured mainnet funding wallet on pubnet —
+ *      see mainnetFunding.ts and mainnetFundingWallet.ts)
  *   3. Acquire USDC via the network's own DEX (trustline + DEX purchase)
  *   4-6. Build the x402 client, GET expecting 402, sign, retry with
  *        PAYMENT-SIGNATURE (see payment.ts)
  *
- * Friendbot (Step 2) has no mainnet equivalent, so the flow fails fast, before
- * any network call, when the configured network is stellar:pubnet — see the
- * explicit check right after the network is read. Everything below that point
- * in this file only ever runs against stellar:testnet.
+ * On stellar:pubnet specifically, two extra guards run before Step 2, in
+ * order: (a) a hard ceiling refusing any endpoint priced above
+ * MAINNET_PRICE_CEILING_USDC, since a misconfigured or malicious endpoint
+ * price must never be able to drain more than that from the developer's own
+ * funding wallet in one click, and (b) a check that a mainnet funding
+ * wallet is actually configured at all, with a clear error pointing at the
+ * "Vellar: Configure mainnet test wallet" command if not.
  *
  * THIS IS THE HIGHEST-SECURITY-RISK FILE IN THE SIDEBAR. Every rule below is
  * enforced structurally, not just documented:
@@ -47,9 +52,21 @@ import { logAndGenericError } from "../outputChannel";
 import { fundWithFriendbot } from "./friendbot";
 import { buyUsdc, openUsdcTrustline } from "./usdc";
 import { runPaymentFlow, discoverPaymentRequirement, PaymentFlowError } from "./payment";
+import { fundThrowawayFromMainnetWallet } from "./mainnetFunding";
+import { getMainnetFundingSecret } from "./mainnetFundingWallet";
 
 const FUNDING_MULTIPLE = 5n;
 const GENERIC_FAILURE_MESSAGE = "Test payment failed — see the Vellar x402 output channel for details.";
+
+// USDC atomic amounts are 7-decimal (see usdc.ts's own comment on this same
+// convention) — $2.00 is 2 * 10^7 atomic units. A hard ceiling on the
+// endpoint's OWN declared price, checked before any mainnet funding call,
+// so a misconfigured or malicious endpoint price can never cause a single
+// test payment to drain more than this from the developer's own funding
+// wallet, regardless of what FUNDING_MULTIPLE's 5x would otherwise compute
+// to for an inflated price.
+const MAINNET_PRICE_CEILING_ATOMIC = 20_000_000n;
+const MAINNET_PRICE_CEILING_USDC_DISPLAY = "2.00";
 
 /**
  * Either a catalog listing (payTo/amount/asset already known from the
@@ -84,25 +101,13 @@ export async function runTestPayment(
   target: TestPaymentTarget,
   progress: vscode.Progress<{ message?: string; increment?: number }>,
   token: vscode.CancellationToken,
+  secrets: vscode.SecretStorage,
 ): Promise<string | undefined> {
   const resource = target.kind === "listing" ? target.listing.resource : target.url;
   try {
     // Read live, same rule as every other setting read in this flow — never
     // cached, so a mid-session network switch takes effect on the next run.
     const network = DataProvider.getConfiguredNetwork();
-
-    // Friendbot (Step 2 below) has no mainnet equivalent — there is no free
-    // faucet for real XLM, and this codebase has no configured funding-source
-    // keypair to send real XLM from. Rather than let fundWithFriendbot's
-    // HTTPS call run against a pubnet keypair (which would misleadingly
-    // succeed against the TESTNET ledger for that address, then fail
-    // confusingly at a later, unrelated step), fail loudly here, before any
-    // network call, with a message that says exactly what's unsupported.
-    if (network === "stellar:pubnet") {
-      throw new Error(
-        "Test payment isn't supported on mainnet yet — no funding source is configured for stellar:pubnet.",
-      );
-    }
 
     let payTo: string;
     let amount: string;
@@ -118,10 +123,46 @@ export async function runTestPayment(
       // discovered live from the endpoint's own 402 challenge — never
       // assumed, never taken from anything the webview sent alongside the
       // URL (it sent nothing alongside it; the URL is the only input).
+      // Read-only (a GET expecting a 402), so this runs regardless of
+      // network — it moves no funds, unlike everything below it.
       progress.report({ message: "Checking the endpoint's payment requirement…", increment: 0 });
       const discovered = await discoverPaymentRequirement(target.url, network);
       payTo = discovered.payTo;
       amount = discovered.amount;
+    }
+
+    // Two mainnet-only guards, both run BEFORE Step 1 even generates the
+    // throwaway keypair (before any funds could possibly move) and in this
+    // order deliberately: the price ceiling first (a pure, local check
+    // against `amount`, no async call needed), THEN the
+    // funding-wallet-configured check (needs an await on SecretStorage) —
+    // cheapest/most certain check first. `mainnetFundingSecret` is read
+    // here (once) and carried into Step 2 below, rather than re-read there
+    // — it never leaves this function's own scope, never logged, never
+    // passed to anything other than fundThrowawayFromMainnetWallet's own
+    // secret parameter, same discipline this file's header comment already
+    // requires of the THROWAWAY keypair's own secret further down.
+    let mainnetFundingSecret: string | undefined;
+    if (network === "stellar:pubnet") {
+      // Hard ceiling on the ENDPOINT's own declared price — checked against
+      // the real atomic amount (never a formatted display string), same
+      // "never re-derive from a formatted string" rule the 5x funding
+      // target below already follows. Refuses BEFORE FUNDING_MULTIPLE's 5x
+      // is ever computed from this amount, so an inflated or malicious
+      // price can't multiply into a larger real spend than this ceiling
+      // allows in the first place.
+      if (BigInt(amount) > MAINNET_PRICE_CEILING_ATOMIC) {
+        throw new Error(
+          `This endpoint's price exceeds the $${MAINNET_PRICE_CEILING_USDC_DISPLAY} mainnet test-payment ceiling — refusing to fund a throwaway wallet for it.`,
+        );
+      }
+
+      mainnetFundingSecret = await getMainnetFundingSecret(secrets);
+      if (mainnetFundingSecret === undefined) {
+        throw new Error(
+          'No mainnet funding wallet is configured — run "Vellar: Configure mainnet test wallet" first, then fund that address with a small amount of real XLM.',
+        );
+      }
     }
 
     // Step 1: generate the throwaway keypair. Nothing above this line has
@@ -159,22 +200,37 @@ export async function runTestPayment(
 
     if (token.isCancellationRequested) return undefined;
 
-    // Step 2: fund via friendbot.
-    progress.report({ message: "Funding the test wallet via friendbot…", increment: 15 });
-    await fundWithFriendbot(throwawayPublicKey);
+    // Step 2: fund the throwaway wallet — friendbot on testnet (free, no
+    // guard needed above), the developer's own configured mainnet funding
+    // wallet on pubnet (real XLM, both guards above already confirmed this
+    // is safe to attempt: price under the ceiling, a funding secret is
+    // configured). `mainnetFundingSecret` is guaranteed defined here
+    // whenever network is "stellar:pubnet" — the guard block above either
+    // set it or already threw, so this function's control flow never
+    // reaches this line on pubnet with it still undefined.
+    if (network === "stellar:pubnet") {
+      progress.report({ message: "Funding the test wallet from your mainnet wallet…", increment: 15 });
+      const funded = await fundThrowawayFromMainnetWallet(mainnetFundingSecret as string, throwawayPublicKey, network);
+      if (!funded.ok) throw new Error(`Mainnet funding failed: ${funded.reason}`);
+    } else {
+      progress.report({ message: "Funding the test wallet via friendbot…", increment: 15 });
+      await fundWithFriendbot(throwawayPublicKey);
+    }
     if (token.isCancellationRequested) return undefined;
 
     // Step 3: acquire USDC — trustline, then DEX purchase. Target = 5x the
     // endpoint's own price, per the instruction, computed from the REAL
     // atomic amount (from the catalog listing, or freshly discovered above
     // for a manual URL — never re-derived from a formatted display string
-    // either way).
+    // either way). The mainnet price ceiling above already bounds `amount`
+    // itself, so this 5x multiple is bounded in turn — it can never exceed
+    // 5x the ceiling regardless of network.
     progress.report({ message: "Opening a USDC trustline…", increment: 15 });
     const trustline = await openUsdcTrustline(keypair, network);
     if (!trustline.ok) throw new Error(`USDC trustline failed: ${trustline.reason}`);
     if (token.isCancellationRequested) return undefined;
 
-    progress.report({ message: "Buying testnet USDC on the DEX…", increment: 15 });
+    progress.report({ message: "Buying USDC on the DEX…", increment: 15 });
     const targetAtomic = (BigInt(amount) * FUNDING_MULTIPLE).toString();
     const purchase = await buyUsdc(keypair, targetAtomic, network);
     if (!purchase.ok) throw new Error(`USDC purchase failed: ${purchase.reason}`);

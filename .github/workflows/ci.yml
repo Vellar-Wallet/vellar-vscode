@@ -111,3 +111,9 @@ jobs:
 
       - name: Run network toggle check
         run: node scripts/run-network-toggle-check.js
+
+      - name: Run discovery network-matching check
+        run: node scripts/run-discovery-network-check.js
+
+      - name: Run mainnet funding wallet check
+        run: node scripts/run-mainnet-funding-wallet-check.js

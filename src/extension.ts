@@ -12,6 +12,7 @@ import type { DetectedRoute, PaymentConfig } from "./types";
 import { DataProvider } from "./sidebar/dataProvider";
 import { VellarSidebarProvider } from "./sidebar/webviewProvider";
 import { hasCompletedOnboarding, OnboardingPanel } from "./onboarding/onboardingProvider";
+import { configureMainnetTestWalletCommand } from "./sidebar/testPayment/mainnetFundingWallet";
 
 const SUPPORTED_LANGUAGES = new Set(["javascript", "typescript", "javascriptreact", "typescriptreact"]);
 
@@ -49,9 +50,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const dataProvider = new DataProvider(context.globalState);
   context.subscriptions.push(dataProvider);
 
-  const sidebarProvider = new VellarSidebarProvider(context.extensionUri, dataProvider);
+  const sidebarProvider = new VellarSidebarProvider(context.extensionUri, dataProvider, context.secrets);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VellarSidebarProvider.viewType, sidebarProvider),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vellar-x402.configureMainnetTestWallet", () =>
+      configureMainnetTestWalletCommand(context.secrets),
+    ),
   );
 
   // Onboarding opens automatically ONLY on a genuine first activation — no

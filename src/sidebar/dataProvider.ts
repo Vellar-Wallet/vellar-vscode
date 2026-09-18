@@ -85,11 +85,25 @@ interface HorizonAccountResponse {
 // directly before writing this, not assumed. In particular: payTo lives inside
 // each accepts[] entry, not at the top level or under trust — the original spec
 // draft had that wrong, and this is the corrected shape.
+//
+// `network` on DiscoveryAccept confirmed against a real live response
+// (`curl .../discovery/resources`) while adding the ?network= query param
+// below — each accepts[] entry carries its own network (e.g.
+// "stellar:testnet"/"stellar:pubnet"), genuinely present on the wire, not
+// assumed from the request's own ?network= value. This matters because
+// ?network= filters which ITEMS are returned (an item with no accept on the
+// requested network is excluded entirely) but does NOT filter individual
+// entries within a matching item's own accepts[] array — a dual-network
+// endpoint's accepts[] still comes back with BOTH its testnet and pubnet
+// entries even when the request only asked for one, confirmed by a live
+// call against a real dual-network resource. See fetchEndpoints' own
+// selection of the matching entry below for why this field is needed.
 
 interface DiscoveryAccept {
   asset: string;
   amount: string;
   payTo: string;
+  network: string;
 }
 interface DiscoveryTrust {
   settlements: number; // always present and numeric — trust.ts's own wire
@@ -423,11 +437,23 @@ export class DataProvider implements vscode.Disposable {
 
   private async fetchEndpoints(): Promise<EndpointsState> {
     // Read live, same rule as the wallet fetch above — never a cached/stored
-    // address, re-checked on every poll tick.
+    // address, re-checked on every poll tick. Network is read live for the
+    // same reason (a mid-session network toggle must be reflected on the
+    // very next fetch, not a stale value captured earlier).
     const address = DataProvider.getConfiguredAddress();
     if (!address) return { kind: "unconfigured" };
+    const network = DataProvider.getConfiguredNetwork();
 
-    const response = await httpsGetJson<DiscoveryResponse>(`${FACILITATOR_BASE}/discovery/resources?limit=100`);
+    // ?network= filters which ITEMS the facilitator returns — an item with
+    // no accept option on this network is excluded entirely — confirmed
+    // live (19 items with no param / with ?network=stellar:testnet, vs. 1
+    // item with ?network=stellar:pubnet). It does NOT filter entries WITHIN
+    // a matching item's own accepts[] array (see DiscoveryAccept's own
+    // comment above) — that's handled below by selecting the matching entry
+    // explicitly, not by trusting the server to have narrowed it already.
+    const response = await httpsGetJson<DiscoveryResponse>(
+      `${FACILITATOR_BASE}/discovery/resources?network=${encodeURIComponent(network)}&limit=100`,
+    );
 
     const listings: EndpointListing[] = response.items
       // Match if ANY accepted payment option's payTo is the developer's address —
@@ -436,21 +462,37 @@ export class DataProvider implements vscode.Disposable {
       // addresses are case-sensitive, this is deliberately not
       // .toLowerCase()'d anywhere.
       .filter((item) => item.accepts.some((accept) => accept.payTo === address))
-      .map((item) => ({
-        resource: item.resource,
-        priceLabel: formatPrice(item.accepts[0]),
-        ownershipState: item.trust.ownershipState ?? "unknown",
-        settlements: item.trust.settlements,
-        lastSettled: item.trust.lastSettled,
-        // Raw, unformatted — see EndpointListing's own doc comment for why
-        // these travel alongside priceLabel instead of being re-derived from
-        // it later. accepts[0] specifically (matching formatPrice's own
-        // choice above) — a real limitation if a resource ever offers more
-        // than one accept option, flagged there already, not new here.
-        payTo: item.accepts[0]?.payTo,
-        amount: item.accepts[0]?.amount,
-        asset: item.accepts[0]?.asset,
-      }));
+      .map((item) => {
+        // REAL BUG, FOUND AND FIXED: this used to always read accepts[0] —
+        // correct back when every resource only ever declared one accept
+        // option, wrong now that a resource can genuinely declare BOTH a
+        // testnet and a pubnet option in the same accepts[] array (confirmed
+        // live against a real dual-network resource; see ?network='s own
+        // comment above for why the query param alone doesn't fix this).
+        // Reading accepts[0] blindly could show the WRONG network's price,
+        // payTo, and asset — e.g. a testnet accept's payTo while the
+        // sidebar is configured for mainnet. Selecting the entry whose own
+        // `network` field matches the configured network is the actual fix;
+        // falls back to accepts[0] only if genuinely none match (keeps the
+        // existing "—" / raw-amount degradation in formatPrice working for
+        // that edge case rather than showing nothing at all).
+        const accept = item.accepts.find((a) => a.network === network) ?? item.accepts[0];
+        return {
+          resource: item.resource,
+          priceLabel: formatPrice(accept),
+          ownershipState: item.trust.ownershipState ?? "unknown",
+          settlements: item.trust.settlements,
+          lastSettled: item.trust.lastSettled,
+          // Raw, unformatted — see EndpointListing's own doc comment for why
+          // these travel alongside priceLabel instead of being re-derived
+          // from it later. Same network-matched `accept` as priceLabel
+          // above, not a separate accepts[0] read — the two must never
+          // disagree about which network's entry they're describing.
+          payTo: accept?.payTo,
+          amount: accept?.amount,
+          asset: accept?.asset,
+        };
+      });
 
     return { kind: "loaded", listings };
   }

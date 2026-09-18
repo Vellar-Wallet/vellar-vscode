@@ -30,11 +30,20 @@ function httpsGetJson(url) {
     });
   }
   if (url.includes("/discovery/resources")) {
+    // network is a real field on each accepts[] entry, confirmed against a
+    // live facilitator response while wiring the ?network= query param and
+    // the matching-entry selection into fetchEndpoints — "stellar:testnet"
+    // here matches this fixture's own testnet-only Horizon/USDC-issuer
+    // values above, so a test running under the DEFAULT_NETWORK
+    // (stellar:pubnet, per vscode-test-stub.js) without explicitly calling
+    // setNetwork("stellar:testnet") first would correctly see this listing
+    // filtered out by fetchEndpoints' own network-matching logic — matching
+    // real behavior, not a fixture gap.
     return Promise.resolve({
       items: [
         {
           resource: "https://vellar-seller-demo.onrender.com/quote",
-          accepts: [{ asset: USDC_SAC, amount: "1000000", payTo: TEST_ADDRESS }],
+          accepts: [{ asset: USDC_SAC, amount: "1000000", payTo: TEST_ADDRESS, network: "stellar:testnet" }],
           trust: { settlements: 3, lastSettled: "2026-08-24T20:35:00.000Z", ownershipState: "verified" },
         },
       ],

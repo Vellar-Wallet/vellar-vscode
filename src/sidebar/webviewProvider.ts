@@ -67,6 +67,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly dataProvider: DataProvider,
+    private readonly secrets: vscode.SecretStorage,
   ) {
     this.gate.add(this.dataProvider.wallet);
     this.gate.add(this.dataProvider.endpoints);
@@ -475,7 +476,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           title: `Test payment: ${resourceForTitle}`,
           cancellable: true,
         },
-        (progress, token) => runTestPayment(target, progress, token),
+        (progress, token) => runTestPayment(target, progress, token, this.secrets),
       );
     } finally {
       // REAL BUG, FOUND AND FIXED: this reset used to happen only after the
