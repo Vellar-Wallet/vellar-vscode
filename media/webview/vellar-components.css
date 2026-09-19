@@ -336,6 +336,23 @@ body {
   color: var(--ink-faint);
 }
 
+/* Shown only while a real payment is settling. Louder than .body-hint
+   (forest ink, not ink-faint) because it is a "wait, don't touch that"
+   message rather than background guidance — a mainnet settle can run 90+
+   seconds, and a resubmit during that window is the exact mistake this
+   exists to prevent. Sits in the amber family for the same reason
+   .field--warning does: a precondition in progress, not an error. */
+.settling-hint {
+  margin: var(--sp-2) 0 0;
+  padding: 0.5em 0.7em;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 700;
+  color: var(--forest);
+  background: var(--sun-soft);
+  clip-path: var(--clip-br-sm);
+}
+
 /* The honest-limitation note under the activate form. Deliberately quiet
    (ink-faint, small) — it is guidance, not a warning: nothing is broken if
    a developer skips the body, the payment still settles. */

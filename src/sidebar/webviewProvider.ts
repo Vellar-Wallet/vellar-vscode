@@ -470,13 +470,34 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     await this.runTestPaymentFlow({ kind: "manualUrl", url, sampleBody }, url);
   }
 
+  /**
+   * Single writer for testPaymentInFlight, so the host's own mutex and what
+   * the webview shows can never disagree.
+   *
+   * The mutex itself already prevented concurrent test payments, but it was
+   * INVISIBLE: the buttons stayed enabled and nothing in the panel changed,
+   * so the only way to discover a payment was running was to click again and
+   * get told off. On mainnet a settle can take 90+ seconds, which is a long
+   * time to stare at an unchanged panel wondering whether the click landed —
+   * and a re-click during that window is exactly the behaviour that surfaced
+   * a dedup bug downstream. Pushing the state to the webview lets the
+   * buttons disable themselves and say what's happening.
+   *
+   * `resource` is echoed back so the webview can label WHICH endpoint is
+   * settling when several cards are on screen.
+   */
+  private setTestPaymentInFlight(inFlight: boolean, resource?: string): void {
+    this.testPaymentInFlight = inFlight;
+    void this.view?.webview.postMessage({ type: "testPaymentState", inFlight, resource });
+  }
+
   private async runTestPaymentFlow(target: TestPaymentTarget, resourceForTitle: string): Promise<void> {
     if (this.testPaymentInFlight) {
       void vscode.window.showInformationMessage("A test payment is already running — wait for it to finish.");
       return;
     }
 
-    this.testPaymentInFlight = true;
+    this.setTestPaymentInFlight(true, resourceForTitle);
     let settlementTx: string | undefined;
     try {
       settlementTx = await vscode.window.withProgress(
@@ -500,11 +521,18 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       // Moving the reset here means it reflects EXACTLY "is runTestPayment
       // still executing", never something about an unrelated follow-up
       // notification's own lifecycle.
-      this.testPaymentInFlight = false;
+      this.setTestPaymentInFlight(false);
     }
 
     if (settlementTx) {
-      const txUrl = `https://stellar.expert/explorer/testnet/tx/${settlementTx}`;
+      // Network-aware, same as the Recent Settlements links: a mainnet
+      // settlement pointed at the testnet explorer shows "not found", which
+      // reads as "the payment didn't happen" for a payment that certainly
+      // did. stellar.expert's mainnet path segment is "public".
+      const txUrl =
+        DataProvider.getConfiguredNetwork() === "stellar:testnet"
+          ? `https://stellar.expert/explorer/testnet/tx/${settlementTx}`
+          : `https://stellar.expert/explorer/public/tx/${settlementTx}`;
       const choice = await vscode.window.showInformationMessage(
         `Test payment settled: ${settlementTx.slice(0, 6)}…`,
         "View on stellar.expert",
@@ -743,6 +771,39 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   // deliberate, minimal duplication rather than a missed reuse.
   const BODY_METHOD_SET = new Set(["POST", "PUT", "PATCH"]);
 
+  // --- Test-payment in-flight state ---------------------------------------
+  // Mirrors the extension host's own testPaymentInFlight mutex (pushed down
+  // via the "testPaymentState" message). The host remains the sole authority
+  // — this is display state only, and a click that slips through anyway is
+  // still refused there.
+  let testPaymentInFlight = false;
+  let testPaymentResource;
+
+  /**
+   * Disables every Test/Activate button while a payment is settling and says
+   * why, rather than leaving them enabled and silently refusing the click.
+   *
+   * A mainnet settle can take 90+ seconds, so "nothing visibly happened" is
+   * the default experience without this — which is what invites the re-click
+   * this is meant to prevent. The card whose payment is actually running
+   * gets the explicit "Settling…" label; the others just disable, since
+   * only one payment can run at a time.
+   */
+  function applyTestPaymentState() {
+    const submit = document.getElementById("test-url-submit");
+    if (submit) {
+      submit.disabled = testPaymentInFlight;
+      submit.textContent = testPaymentInFlight ? "Settling…" : "Activate endpoint";
+    }
+    endpointsRoot.querySelectorAll("[data-test-resource]").forEach((btn) => {
+      btn.disabled = testPaymentInFlight;
+      const isThisOne = testPaymentInFlight && btn.dataset.testResource === testPaymentResource;
+      btn.textContent = isThisOne ? "Settling…" : "Test";
+    });
+    const hint = document.getElementById("test-payment-hint");
+    if (hint) hint.hidden = !testPaymentInFlight;
+  }
+
   /** Escapes a value for safe use inside an attribute selector. A resource
    *  URL contains ":" and "/" (and may contain quotes), all of which would
    *  otherwise break or alter the selector. CSS.escape is available in the
@@ -860,6 +921,8 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
           </div>
           <button class="btn btn--outline" id="test-url-submit">Activate endpoint</button>
         </div>
+        <p class="settling-hint" id="test-payment-hint" hidden>Settling a real payment. This can take
+        90 seconds or more on mainnet — don't resubmit.</p>
         <p class="body-hint">For POST endpoints, provide a sample request body so the endpoint
         can process the request after payment settles. Without a body the payment will settle
         but the endpoint may return a validation error.</p>
@@ -939,6 +1002,11 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     // developer immediately clicks Test.
     restoreCardBodies(cardSnapshot);
     restoreManualForm(manualSnapshot);
+    // A poll tick can rebuild this list WHILE a payment is settling, which
+    // would otherwise hand back a fresh set of enabled buttons mid-flight.
+    // Re-applying the current state here keeps the disabled/settling
+    // treatment across every re-render.
+    applyTestPaymentState();
 
     // Wired unconditionally — the form above is always in the DOM now
     // (empty-state or listings-present branch alike), so this listener
@@ -1116,6 +1184,11 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
 
   window.addEventListener("message", (event) => {
     if (event.data?.type === "network") renderNetworkBadge(event.data.network);
+    if (event.data?.type === "testPaymentState") {
+      testPaymentInFlight = event.data.inFlight === true;
+      testPaymentResource = event.data.resource;
+      applyTestPaymentState();
+    }
     if (event.data?.type === "wallet") render(event.data.state);
     if (event.data?.type === "endpoints") renderEndpoints(event.data.state);
     if (event.data?.type === "settlements") renderSettlements(event.data.state, event.data.pagination);

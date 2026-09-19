@@ -242,9 +242,52 @@ async function testExternalConfigChangeUpdatesBadge(): Promise<void> {
   }
 }
 
+/**
+ * The in-flight state must be BROADCAST to the webview, not just held on the
+ * host. The host's mutex always blocked concurrent payments, but silently:
+ * the buttons stayed enabled and nothing indicated a payment was running,
+ * so the only way to find out was to click again and be refused. On mainnet
+ * a settle runs 90+ seconds, and a resubmit in that window is exactly the
+ * mistake this messaging prevents.
+ *
+ * Asserts both edges: true when the flow starts (naming the resource, so the
+ * right card can label itself) and false when it ends — the false edge being
+ * the one that, if dropped, would leave the panel permanently stuck showing
+ * "Settling…".
+ */
+async function testTestPaymentStateIsBroadcast(): Promise<void> {
+  vscodeTest.setNetwork("stellar:testnet");
+  const { dataProvider, posted, sendFromWebview } = setup();
+  try {
+    await settle();
+    posted.length = 0;
+
+    // A manual URL that fails fast (not a real x402 endpoint) — this test is
+    // about the state messages bracketing the flow, not about the payment.
+    sendFromWebview({ type: "testManualUrl", url: "https://example.test/not-a-real-endpoint" });
+    await settle();
+
+    const states = posted.filter((m) => m.type === "testPaymentState");
+    assert(states.length >= 2, `both edges were broadcast, got ${states.length} state message(s)`);
+
+    const first = states[0];
+    assert(first.inFlight === true, "the first state message marks the payment as in flight");
+    assert(
+      first.resource === "https://example.test/not-a-real-endpoint",
+      `the in-flight message names the resource, got ${String(first.resource)}`,
+    );
+
+    const last = states[states.length - 1];
+    assert(last.inFlight === false, "the final state message clears the in-flight flag");
+  } finally {
+    dataProvider.dispose();
+  }
+}
+
 export async function runNetworkToggleChecks(): Promise<void> {
   await testTogglePostsNetworkAndWritesSetting();
   await testTogglerejectsUnknownNetworkValue();
   await testToggleRefreshesAllThreeSections();
   await testExternalConfigChangeUpdatesBadge();
+  await testTestPaymentStateIsBroadcast();
 }
