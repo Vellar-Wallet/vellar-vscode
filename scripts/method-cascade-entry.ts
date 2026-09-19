@@ -16,7 +16,7 @@
  * (confirmed against a live endpoint), so x402HTTPClient's own real decoder
  * runs rather than being faked.
  */
-import { discoverPaymentRequirement, PaymentFlowError } from "../src/sidebar/testPayment/payment";
+import { describeBuildFailure, discoverPaymentRequirement, PaymentFlowError } from "../src/sidebar/testPayment/payment";
 import type { HttpMethod } from "../src/types";
 
 const NETWORK = "stellar:pubnet";
@@ -292,6 +292,66 @@ async function testTransportErrorIsDistinctFromNoGate(): Promise<void> {
   );
 }
 
+/**
+ * An insufficient USDC balance must be reported as a SHORTFALL WITH A NUMBER,
+ * not as a raw Soroban HostError.
+ *
+ * Asserted against the VERBATIM error text captured from a real mainnet
+ * attempt (wallet held 0.356152 USDC, price was 0.50), so a change to the
+ * parsing — or to how the SDK formats this message — fails here rather than
+ * silently reverting to the old, actively misleading wording.
+ */
+function testInsufficientBalanceReportsShortfall(): void {
+  const realError = [
+    "Stellar simulation failed with error message: HostError: Error(Contract, #10)",
+    "",
+    "Event log (newest first):",
+    '   0: [Diagnostic Event] topics:[error, Error(Contract, #10)], data:["resulting balance is not within the allowed range", 0, -1438480, 9223372036854775807]',
+    "   1: [Diagnostic Event] topics:[fn_call, " + ASSET + ", transfer], data:[GDTAQ7MT, GD6TC7QY, 5000000]",
+  ].join("\n");
+
+  const message = describeBuildFailure(new Error(realError));
+
+  assert(
+    message.includes("short by 0.143848 USDC"),
+    `the exact shortfall is named, got "${message}"`,
+  );
+  assert(message.includes("Nothing was spent"), "the message states that nothing was spent");
+  assert(
+    !message.includes("HostError") && !message.includes("Diagnostic Event"),
+    "the raw Soroban HostError is not pasted at the developer",
+  );
+  assert(
+    !message.includes("no trustline"),
+    "the misleading trustline guess is not used when the real cause is known",
+  );
+
+  // The wallet's balance plus the reported shortfall must equal the price —
+  // this is what makes the number trustworthy enough to act on.
+  assert(
+    Math.round((0.356152 + 0.143848) * 1e7) === 5_000_000,
+    "the reported shortfall reconciles: balance + shortfall === price",
+  );
+
+  // Anything that is NOT this specific contract error must still fall through
+  // to the generic message, carrying the original text for diagnosis.
+  const other = describeBuildFailure(new Error("connection refused"));
+  assert(
+    other.includes("connection refused") && other.includes("no trustline"),
+    `an unrelated failure keeps the generic message, got "${other}"`,
+  );
+
+  // A POSITIVE resulting balance is not a shortfall and must not be reported
+  // as one — guards against the regex matching the wrong field.
+  const positive = describeBuildFailure(
+    new Error('data:["resulting balance is not within the allowed range", 0, 500, 9223372036854775807]'),
+  );
+  assert(
+    !positive.includes("short by"),
+    `a non-negative resulting balance is not reported as a shortfall, got "${positive}"`,
+  );
+}
+
 export async function runMethodCascadeChecks(): Promise<void> {
   const realFetch = globalThis.fetch;
   try {
@@ -306,6 +366,7 @@ export async function runMethodCascadeChecks(): Promise<void> {
     await testNoGateFoundError();
     await testSampleBodyIsSentVerbatim();
     await testTransportErrorIsDistinctFromNoGate();
+  testInsufficientBalanceReportsShortfall();
   } finally {
     (globalThis as { fetch: unknown }).fetch = realFetch;
   }

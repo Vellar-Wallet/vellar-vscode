@@ -315,6 +315,43 @@ export type PaymentFlowStep =
   | { step: "sign"; status: "done" }
   | { step: "settle"; status: "done"; settlementTx: string; payer?: string };
 
+/**
+ * Turns a failed `createPaymentPayload` into a message a developer can act on.
+ *
+ * Exported for direct testing: reaching this branch through the real flow
+ * would need a live Soroban RPC returning a specific contract error, so the
+ * parsing is tested against VERBATIM captured error text instead of a mock
+ * of the SDK.
+ *
+ * Soroban reports an insufficient balance as contract error #10 with a
+ * diagnostic reading "resulting balance is not within the allowed range",
+ * followed by [min, resulting, max] — where a NEGATIVE resulting value is
+ * exactly the shortfall in atomic units (7 decimals). That is the single most
+ * common way this step fails and it is precisely quantifiable, so report the
+ * actual number rather than leaving the developer to decode a raw HostError.
+ *
+ * The previous message guessed "commonly: no trustline, or an empty balance"
+ * for EVERY build failure, which was wrong in both halves for a real mainnet
+ * case: the wallet had a trustline and a non-empty balance, it was simply
+ * 0.143848 USDC short of the price.
+ *
+ * Nothing has moved on-chain at this point — the payload is built and signed
+ * locally, before the paid request is ever sent — so the message says so
+ * explicitly, since "payment failed" otherwise reads as "money may be gone".
+ */
+export function describeBuildFailure(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+
+  const shortfall = /resulting balance is not within the allowed range",\s*-?\d+,\s*(-\d+)/.exec(raw);
+  if (shortfall) {
+    // Trailing zeros trimmed: 1438480 atomic is "0.143848", not "0.1438480".
+    const missing = (Number(shortfall[1]) * -1) / 10_000_000;
+    return `Not enough USDC to make this payment: short by ${missing} USDC. Top up the paying wallet and try again. Nothing was spent.`;
+  }
+
+  return `Could not build the payment (commonly: no trustline, or an empty balance): ${raw}`;
+}
+
 export async function runPaymentFlow(
   throwawaySecret: string,
   resourceUrl: string,
@@ -368,12 +405,7 @@ export async function runPaymentFlow(
   try {
     payload = await withTimeout(client.createPaymentPayload(required), SOROBAN_RPC_TIMEOUT_MS, "createPaymentPayload");
   } catch (err) {
-    throw new PaymentFlowError(
-      "build_failed",
-      `Could not build the payment (commonly: no trustline, or an empty balance): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+    throw new PaymentFlowError("build_failed", describeBuildFailure(err));
   }
   onStep({ step: "sign", status: "done" });
 
