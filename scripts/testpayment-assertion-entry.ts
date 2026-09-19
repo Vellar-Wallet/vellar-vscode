@@ -287,29 +287,30 @@ async function testNetworkPubnetOverPriceCeilingFails(): Promise<void> {
 }
 
 /**
- * Proves the successful mainnet path: network at stellar:pubnet, a
- * genuinely configured funding wallet, and a price AT the ceiling (exactly
- * $2.00 — proving the ceiling is inclusive, not exclusive) all together
- * must let the flow proceed PAST both guards and actually call
- * fundThrowawayFromMainnetWallet with the right arguments (the throwaway
- * wallet's own public key, and the configured secret) — then continue into
- * Step 3 (USDC trustline), which fake-usdc.js fails deterministically, so
- * this test only needs to prove funding was reached and called correctly,
- * not that the whole flow settles end to end.
+ * Proves the mainnet SHORT PATH: with a configured funding wallet and a
+ * price AT the ceiling (exactly $2.00 — proving the ceiling check is `>`,
+ * i.e. inclusive), the flow clears both guards and then provisions NOTHING.
+ *
+ * This is the behavioural heart of the simplification. Mainnet used to
+ * create a throwaway wallet, fund it with XLM, open its trustline and send
+ * it USDC — four steps and ~1.5 XLM stranded per run. It now pays straight
+ * from the funding wallet, so the correct assertion is that none of those
+ * provisioning calls happen at all.
  */
-async function testNetworkPubnetWithWalletConfiguredProceedsToFunding(): Promise<void> {
+async function testNetworkPubnetPaysDirectlyWithoutProvisioning(): Promise<void> {
   fakeFriendbot._test.reset();
   fakeMainnetFunding._test.reset();
   vscodeTest.setNetwork("stellar:pubnet");
   vscodeTest.setPayToAddress("GDIFFERENTPAYTOTHATISNOTUSED0000000000000000000000000000");
   vscodeTest.outputChannelLines.length = 0;
 
-  const configuredSecret = "SDUMMYFUNDINGWALLETSECRETFORTESTS0000000000000000000000000";
+  // A REAL Stellar secret, because the mainnet path now derives the payer's
+  // public key from it via Keypair.fromSecret — a placeholder string would
+  // throw before reaching the behaviour under test.
+  const configuredSecret = "SAWTNAI3366Q3WXMHNCSXZGPHH73KGS6M7JOQILZWVFNPHZJBXM7Y6VZ";
   const secrets = vscodeTest.createFakeSecretStorage();
   await secrets.store("vellar-x402.mainnetFundingWalletSecret", configuredSecret);
 
-  // amount === the ceiling exactly (20_000_000 atomic = $2.00) — proves the
-  // ceiling check is `>`, not `>=`, i.e. inclusive of the ceiling itself.
   const atCeilingTarget: TestPaymentTarget = {
     kind: "listing",
     listing: { ...FAKE_LISTING, amount: "20000000" },
@@ -318,31 +319,23 @@ async function testNetworkPubnetWithWalletConfiguredProceedsToFunding(): Promise
 
   if (fakeFriendbot._test.callCount !== 0) {
     throw new Error(
-      `FAIL: fundWithFriendbot was called ${fakeFriendbot._test.callCount} time(s) — friendbot must NEVER be called on pubnet, even on the successful path`,
+      `FAIL: fundWithFriendbot was called ${fakeFriendbot._test.callCount} time(s) — friendbot must NEVER be called on pubnet`,
     );
   }
-  if (fakeMainnetFunding._test.callCount !== 1) {
+  if (fakeMainnetFunding._test.callCount !== 0) {
     throw new Error(
-      `FAIL: expected fundThrowawayFromMainnetWallet to be called exactly once, was called ${fakeMainnetFunding._test.callCount} time(s)`,
+      `FAIL: mainnet funding was called ${fakeMainnetFunding._test.callCount} time(s) — the mainnet path must create and fund NOTHING, it pays directly from the funding wallet`,
     );
   }
-  const call = fakeMainnetFunding._test.calls[0];
-  if (call.secret !== configuredSecret) {
-    throw new Error("FAIL: fundThrowawayFromMainnetWallet was called with the wrong secret — not the one that was configured");
-  }
-  if (call.network !== "stellar:pubnet") {
-    throw new Error(`FAIL: fundThrowawayFromMainnetWallet was called with network="${call.network}", expected "stellar:pubnet"`);
-  }
-  // publicKey must be a real, well-shaped throwaway public key — not
-  // asserting an exact value (Keypair.random() here is genuinely random,
-  // unpatched, same as testDifferentAddressesProceedPastAssertion above),
-  // just that SOME real public key was passed, proving the throwaway
-  // keypair generated in Step 1 is what actually got funded.
-  if (typeof call.publicKey !== "string" || call.publicKey.length !== 56 || !call.publicKey.startsWith("G")) {
-    throw new Error(`FAIL: fundThrowawayFromMainnetWallet was called with a malformed publicKey: ${JSON.stringify(call.publicKey)}`);
+  // It must have gotten PAST the guards — a flow that died at the price
+  // ceiling or the not-configured check would also show zero funding calls,
+  // so assert the absence of those specific errors to tell the cases apart.
+  const logged = vscodeTest.outputChannelLines.join("\n");
+  if (logged.includes("mainnet test-payment ceiling") || logged.includes("No mainnet funding wallet is configured")) {
+    throw new Error(`FAIL: the flow died at a guard rather than proceeding to pay; got: ${logged}`);
   }
   console.log(
-    "  ok: network=stellar:pubnet, wallet configured, price at the $2.00 ceiling — fundThrowawayFromMainnetWallet is called once with the configured secret and the throwaway wallet's real public key",
+    "  ok: network=stellar:pubnet at the $2.00 ceiling — clears both guards and pays directly, creating and funding NOTHING",
   );
 
   vscodeTest.setNetwork("stellar:testnet");
@@ -354,5 +347,5 @@ export async function runAssertionChecks(): Promise<void> {
   await testPayToCollisionThrowsBeforeFriendbot();
   await testNetworkPubnetWithNoWalletConfiguredFails();
   await testNetworkPubnetOverPriceCeilingFails();
-  await testNetworkPubnetWithWalletConfiguredProceedsToFunding();
+  await testNetworkPubnetPaysDirectlyWithoutProvisioning();
 }

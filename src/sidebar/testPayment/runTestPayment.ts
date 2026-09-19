@@ -1,14 +1,30 @@
 /**
- * Orchestrates the full 6-step throwaway test payment, against whichever
- * network vellar-x402.network currently names (read once, live, at the top
- * of runTestPayment — see DataProvider.getConfiguredNetwork()):
- *   1. Generate keypair (in memory only)
- *   2. Fund the throwaway wallet with real/test XLM (friendbot on testnet;
- *      the developer's OWN configured mainnet funding wallet on pubnet —
- *      see mainnetFunding.ts and mainnetFundingWallet.ts)
- *   3. Acquire USDC via the network's own DEX (trustline + DEX purchase)
- *   4-6. Build the x402 client, request the resource expecting 402, sign,
- *        retry with PAYMENT-SIGNATURE (see payment.ts)
+ * Orchestrates a test payment against whichever network vellar-x402.network
+ * currently names (read once, live, at the top of runTestPayment — see
+ * DataProvider.getConfiguredNetwork()). The two networks take deliberately
+ * different routes to the same place:
+ *
+ * MAINNET (stellar:pubnet) — pay directly from the developer's own
+ * configured funding wallet. One signature, nothing created, nothing
+ * stranded. That wallet already exists, already holds a USDC trustline, and
+ * already holds the USDC, so every precondition a throwaway wallet would
+ * have to be walked through is already satisfied.
+ *
+ * TESTNET — the throwaway route: generate a keypair, friendbot it, open a
+ * trustline, buy USDC on the DEX, pay, discard. Every step is free here, so
+ * a disposable identity costs nothing and keeps test payments isolated from
+ * any real wallet.
+ *
+ * WHY NOT A THROWAWAY ON MAINNET, since that was the original design: it
+ * required a 1.0 XLM account reserve plus 0.5 XLM for its trustline, both
+ * LOCKED by protocol and stranded permanently when the keypair is discarded
+ * seconds later — and it added an account creation, a trustline submission
+ * and an asset transfer, each a step that could fail with real money already
+ * committed. The isolation it bought is worth nothing on mainnet, where the
+ * developer is spending their own funds either way.
+ *
+ * Then, on both networks: build the x402 client, request the resource
+ * expecting 402, sign, retry with PAYMENT-SIGNATURE (see payment.ts).
  *
  * HTTP METHOD: the endpoint's verb is resolved BEFORE any funds move, either
  * from the catalog listing's own declared method or by probing the endpoint's
@@ -60,11 +76,27 @@ import { logAndGenericError } from "../outputChannel";
 import { fundWithFriendbot } from "./friendbot";
 import { buyUsdc, openUsdcTrustline } from "./usdc";
 import { runPaymentFlow, discoverPaymentRequirement, PaymentFlowError } from "./payment";
-import { fundThrowawayFromMainnetWallet } from "./mainnetFunding";
 import { getMainnetFundingSecret } from "./mainnetFundingWallet";
 import type { HttpMethod } from "../../types";
 
-const FUNDING_MULTIPLE = 5n;
+/**
+ * How much USDC to buy, relative to the endpoint's own price.
+ *
+ * Was 5x, which made sense only on testnet where the XLM being spent is free
+ * from a faucet. On mainnet it is real money and 5x is actively harmful: at
+ * ~$0.097/XLM a $0.50 endpoint needs ~2.57 XLM of USDC to pay once, but 5x
+ * demanded ~12.86 XLM — more than the 3 XLM the throwaway wallet is funded
+ * with, so the DEX purchase failed outright and no mainnet test could ever
+ * complete. 20% over the exact price is enough to absorb DEX slippage
+ * between quoting and trading without stranding meaningful value in a wallet
+ * that is discarded seconds later.
+ *
+ * Applied as integer math on 7-decimal atomic amounts: multiply by 12, then
+ * divide by 10. Done in that order so the division truncates at most 1 atomic
+ * unit (0.0000001 USDC), rather than losing precision before the multiply.
+ */
+const FUNDING_NUMERATOR = 12n;
+const FUNDING_DENOMINATOR = 10n;
 const GENERIC_FAILURE_MESSAGE = "Test payment failed — see the Vellar x402 output channel for details.";
 
 // USDC atomic amounts are 7-decimal (see usdc.ts's own comment on this same
@@ -72,8 +104,8 @@ const GENERIC_FAILURE_MESSAGE = "Test payment failed — see the Vellar x402 out
 // endpoint's OWN declared price, checked before any mainnet funding call,
 // so a misconfigured or malicious endpoint price can never cause a single
 // test payment to drain more than this from the developer's own funding
-// wallet, regardless of what FUNDING_MULTIPLE's 5x would otherwise compute
-// to for an inflated price.
+// wallet, regardless of what the funding buffer would otherwise compute to
+// for an inflated price.
 const MAINNET_PRICE_CEILING_ATOMIC = 20_000_000n;
 const MAINNET_PRICE_CEILING_USDC_DISPLAY = "2.00";
 
@@ -224,11 +256,11 @@ export async function runTestPayment(
     if (network === "stellar:pubnet") {
       // Hard ceiling on the ENDPOINT's own declared price — checked against
       // the real atomic amount (never a formatted display string), same
-      // "never re-derive from a formatted string" rule the 5x funding
-      // target below already follows. Refuses BEFORE FUNDING_MULTIPLE's 5x
-      // is ever computed from this amount, so an inflated or malicious
-      // price can't multiply into a larger real spend than this ceiling
-      // allows in the first place.
+      // "never re-derive from a formatted string" rule the funding target
+      // below already follows. Refuses BEFORE the funding buffer is ever
+      // computed from this amount, so an inflated or malicious price can't
+      // multiply into a larger real spend than this ceiling allows in the
+      // first place.
       if (BigInt(amount) > MAINNET_PRICE_CEILING_ATOMIC) {
         throw new Error(
           `This endpoint's price exceeds the $${MAINNET_PRICE_CEILING_USDC_DISPLAY} mainnet test-payment ceiling — refusing to fund a throwaway wallet for it.`,
@@ -243,76 +275,94 @@ export async function runTestPayment(
       }
     }
 
-    // Step 1: generate the throwaway keypair. Nothing above this line has
-    // touched key material at all; nothing below this function's `return`/
-    // `catch` will let it escape.
-    progress.report({ message: "Generating a throwaway test wallet…", increment: 0 });
-    const keypair = Keypair.random();
-    const throwawayPublicKey = keypair.publicKey();
-    const throwawaySecret = keypair.secret();
+    // MAINNET SHORT PATH: pay directly from the developer's own funding
+    // wallet, and skip the throwaway wallet entirely.
+    //
+    // The throwaway wallet exists for TESTNET, where friendbot hands out free
+    // XLM and a disposable identity costs nothing. On mainnet it cost a great
+    // deal for no benefit: creating it required a 1.0 XLM base reserve plus
+    // 0.5 XLM for its USDC trustline — both LOCKED by protocol and stranded
+    // forever when the keypair is discarded seconds later — on top of an
+    // account creation, a trustline submission, and a USDC transfer, every
+    // one of which was a step that could (and repeatedly did) fail.
+    //
+    // The funding wallet already satisfies every one of those preconditions:
+    // it exists, it has a USDC trustline, and it holds the USDC. Paying from
+    // it directly reduces the whole mainnet flow to a single signature and
+    // strands nothing.
+    //
+    // The payer/payee assertions below still apply and are checked the same
+    // way — they are about "never pay yourself", which is exactly as
+    // meaningful for the funding wallet as for a throwaway one.
+    const payFromFundingWallet = network === "stellar:pubnet";
+
+    // Derive the payer's identity FIRST, and assert on it BEFORE any network
+    // call that could spend anything. On testnet that means generating the
+    // keypair but NOT yet funding it; provisioning happens further down,
+    // after both assertions have passed. Getting this order wrong would
+    // friendbot a wallet before establishing it is safe to use — caught by
+    // scripts/run-testpayment-assertion-check.js, which asserts
+    // fundWithFriendbot is never reached when an assertion fires.
+    let payerSecret: string;
+    let payerPublicKey: string;
+    let throwawayKeypair: Keypair | undefined;
+    if (payFromFundingWallet) {
+      payerSecret = mainnetFundingSecret as string;
+      payerPublicKey = Keypair.fromSecret(payerSecret).publicKey();
+    } else {
+      progress.report({ message: "Generating a throwaway test wallet…", increment: 0 });
+      throwawayKeypair = Keypair.random();
+      payerPublicKey = throwawayKeypair.publicKey();
+      payerSecret = throwawayKeypair.secret();
+    }
 
     // The non-negotiable assertion, run BEFORE any network call that could
-    // spend anything: the throwaway wallet must never be the developer's own
-    // configured payout address. Reads the LIVE setting, same rule every
-    // other payToAddress read in this codebase follows (never cached) —
-    // static analysis of "this constant differs from that constant" would
-    // prove nothing if either read a stale value.
+    // spend anything: the payer must never be the developer's own configured
+    // payout address. Reads the LIVE setting, same rule every other
+    // payToAddress read in this codebase follows (never cached) — static
+    // analysis of "this constant differs from that constant" would prove
+    // nothing if either read a stale value.
+    //
+    // This matters MORE now, not less, than when the payer was always a
+    // throwaway: on mainnet the payer is the developer's real funding
+    // wallet, so "am I about to pay myself" is a live question rather than a
+    // cryptographic impossibility.
     const developerPayToAddress = DataProvider.getConfiguredAddress();
-    if (developerPayToAddress !== undefined && throwawayPublicKey === developerPayToAddress) {
-      // Cryptographically this branch should be unreachable (Keypair.random()
-      // colliding with a specific existing address has probability ~0), but
-      // the instruction is explicit: assert it in code, not just a comment.
-      // If this ever somehow fired, the safe behavior is to abort loudly
-      // before any funds move, not to proceed.
-      throw new Error("Assertion failed: throwaway test wallet must never equal the developer's own payTo address.");
+    if (developerPayToAddress !== undefined && payerPublicKey === developerPayToAddress) {
+      throw new Error("Assertion failed: the paying wallet must never equal the developer's own payTo address.");
     }
-    // Second, distinct check, meaningful specifically for the manual-URL
-    // case: `payTo` here is the ENDPOINT's own receiving address (from the
-    // catalog, or freshly discovered from its 402 for a manual URL) — not
-    // necessarily the same value as developerPayToAddress if the developer
-    // is testing an endpoint they don't own. The throwaway wallet must never
-    // equal the payee it's about to pay, regardless of whose address that is.
-    if (throwawayPublicKey === payTo) {
-      throw new Error("Assertion failed: throwaway test wallet must never equal the endpoint's own payTo address.");
+    // Second, distinct check: `payTo` here is the ENDPOINT's own receiving
+    // address (from the catalog, or freshly discovered from its 402 for a
+    // manual URL) — not necessarily the same value as developerPayToAddress
+    // if the developer is testing an endpoint they don't own. The payer must
+    // never equal the payee it's about to pay, whoever that is.
+    if (payerPublicKey === payTo) {
+      throw new Error("Assertion failed: the paying wallet must never equal the endpoint's own payTo address.");
     }
 
     if (token.isCancellationRequested) return undefined;
 
-    // Step 2: fund the throwaway wallet — friendbot on testnet (free, no
-    // guard needed above), the developer's own configured mainnet funding
-    // wallet on pubnet (real XLM, both guards above already confirmed this
-    // is safe to attempt: price under the ceiling, a funding secret is
-    // configured). `mainnetFundingSecret` is guaranteed defined here
-    // whenever network is "stellar:pubnet" — the guard block above either
-    // set it or already threw, so this function's control flow never
-    // reaches this line on pubnet with it still undefined.
-    if (network === "stellar:pubnet") {
-      progress.report({ message: "Funding the test wallet from your mainnet wallet…", increment: 15 });
-      const funded = await fundThrowawayFromMainnetWallet(mainnetFundingSecret as string, throwawayPublicKey, network);
-      if (!funded.ok) throw new Error(`Mainnet funding failed: ${funded.reason}`);
-    } else {
+    // Testnet only: NOW provision the throwaway wallet, once the assertions
+    // above have cleared it. Mainnet needs none of this — its funding wallet
+    // is already funded, already has a trustline, and already holds USDC.
+    if (throwawayKeypair !== undefined) {
       progress.report({ message: "Funding the test wallet via friendbot…", increment: 15 });
-      await fundWithFriendbot(throwawayPublicKey);
+      await fundWithFriendbot(payerPublicKey);
+      if (token.isCancellationRequested) return undefined;
+
+      progress.report({ message: "Opening a USDC trustline…", increment: 15 });
+      const trustline = await openUsdcTrustline(throwawayKeypair, network);
+      if (!trustline.ok) throw new Error(`USDC trustline failed: ${trustline.reason}`);
+      if (token.isCancellationRequested) return undefined;
+
+      progress.report({ message: "Buying USDC on the DEX…", increment: 15 });
+      const targetAtomic = ((BigInt(amount) * FUNDING_NUMERATOR) / FUNDING_DENOMINATOR).toString();
+      const purchase = await buyUsdc(throwawayKeypair, targetAtomic, network);
+      if (!purchase.ok) throw new Error(`USDC purchase failed: ${purchase.reason}`);
+      if (token.isCancellationRequested) return undefined;
     }
-    if (token.isCancellationRequested) return undefined;
 
-    // Step 3: acquire USDC — trustline, then DEX purchase. Target = 5x the
-    // endpoint's own price, per the instruction, computed from the REAL
-    // atomic amount (from the catalog listing, or freshly discovered above
-    // for a manual URL — never re-derived from a formatted display string
-    // either way). The mainnet price ceiling above already bounds `amount`
-    // itself, so this 5x multiple is bounded in turn — it can never exceed
-    // 5x the ceiling regardless of network.
-    progress.report({ message: "Opening a USDC trustline…", increment: 15 });
-    const trustline = await openUsdcTrustline(keypair, network);
-    if (!trustline.ok) throw new Error(`USDC trustline failed: ${trustline.reason}`);
-    if (token.isCancellationRequested) return undefined;
-
-    progress.report({ message: "Buying USDC on the DEX…", increment: 15 });
-    const targetAtomic = (BigInt(amount) * FUNDING_MULTIPLE).toString();
-    const purchase = await buyUsdc(keypair, targetAtomic, network);
-    if (!purchase.ok) throw new Error(`USDC purchase failed: ${purchase.reason}`);
-    if (token.isCancellationRequested) return undefined;
+    const throwawaySecret = payerSecret;
 
     // Steps 4-6: the real x402 payment flow.
     progress.report({ message: "Requesting the endpoint (expecting 402)…", increment: 15 });

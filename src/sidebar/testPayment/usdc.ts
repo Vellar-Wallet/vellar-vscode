@@ -1,9 +1,14 @@
 /**
- * Provision a throwaway keypair with USDC on the configured network: open a
- * trustline, then buy `targetAmountAtomic`'s worth on that network's DEX,
- * paying in the wallet's own XLM (friendbot-funded by the caller before this
- * runs, on testnet — see runTestPayment.ts's own gate on the pubnet case,
- * since friendbot has no mainnet equivalent).
+ * Provision a throwaway keypair with USDC: open a trustline, then buy
+ * `targetAmountAtomic`'s worth on the DEX, paying in the wallet's own
+ * friendbot-funded XLM.
+ *
+ * The DEX purchase here is now a TESTNET-ONLY path. On mainnet the throwaway
+ * wallet is sent USDC directly from the developer's own funding wallet (see
+ * mainnetFunding.ts's sendUsdcToThrowaway and its header comment for why
+ * trading on mainnet was removed). openUsdcTrustline below is still used by
+ * BOTH networks — a wallet must have a trustline before it can hold USDC,
+ * however that USDC arrives.
  *
  * Ported from vellar-playground/lib/usdc.ts (itself ported from
  * vellar-facilitator/examples/provision-testnet.mjs's USE_USDC path) — the
@@ -15,7 +20,7 @@
  *    funding target. This extension already knows the exact price of the
  *    specific endpoint the developer clicked Test on (EndpointListing's own
  *    accepts[].amount, read fresh at click time) — no catalog lookup needed,
- *    the caller (runTestPayment.ts) computes the 5x target directly and
+ *    the caller (runTestPayment.ts) computes the buffered target directly and
  *    passes it in as `targetAmountAtomic`.
  *  - USDC_ISSUER_BY_NETWORK is a local constant here, not imported from a
  *    shared config module — this file has no sibling config file of its own,
@@ -68,11 +73,6 @@ export const USDC_ISSUER_BY_NETWORK: Record<StellarNetwork, string> = {
   "stellar:pubnet": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
 };
 
-// See vellar-playground/lib/usdc.ts's own comment on this exact number: the
-// reference script observed ~0.559 XLM per USDC on the live testnet DEX and
-// this caps at 250 XLM per USDC unit (~450x that price) — generous headroom
-// against a thin order book while still failing outright rather than
-// draining the wallet if the market is genuinely broken.
 const SUBMIT_TIMEOUT_SECONDS = 35;
 // Exported (read-only, no behavior change) so scripts/run-horizon-timeout-check.js
 // can assert real sane bounds on these values directly, rather than
@@ -127,7 +127,27 @@ export const HORIZON_SUBMIT_TIMEOUT_MS = 60_000;
 // faster than an actual ledger-committing submit.
 export const SOROBAN_RPC_TIMEOUT_MS = 30_000;
 
-const XLM_PER_USDC_UNIT_CAP = 250;
+/**
+ * Slippage ceiling for the DEX purchase, as a multiple of the live quoted
+ * price — NOT a flat XLM-per-USDC figure.
+ *
+ * REAL BUG, FOUND AND FIXED: this was `250` and sendMax was computed as
+ * `wholeUnitsCeil * 250` XLM, i.e. "I will pay up to 250 XLM per whole USDC
+ * unit". That was survivable on testnet, where the throwaway wallet holds
+ * 10000 free friendbot XLM and an absurd ceiling costs nothing. On mainnet
+ * it broke every purchase: buying 0.6 USDC rounds up to 1 whole unit, so
+ * sendMax became 250 XLM against a wallet holding ~4.5 spendable — and
+ * Stellar rejects a pathPaymentStrictReceive whose sendMax exceeds the
+ * balance BEFORE attempting any trade, regardless of what the trade would
+ * actually have cost (2.65 XLM at the time). The purchase could never
+ * succeed no matter how the wallet was funded.
+ *
+ * Quoting the real price and allowing a modest multiple over it keeps the
+ * protection this was meant to provide (a broken or manipulated order book
+ * can't drain the wallet) while staying achievable with a realistically
+ * funded wallet. 2x absorbs ordinary book movement between quote and submit.
+ */
+const SLIPPAGE_MULTIPLIER = 2;
 
 const USDC_DECIMALS = 7;
 const ATOMIC_SCALE = 10n ** BigInt(USDC_DECIMALS);
@@ -158,7 +178,10 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, label: str
   }
 }
 
-function atomicToDecimalString(atomic: bigint): string {
+/** Exported so mainnetFunding.ts's USDC transfer formats its amount through
+ *  the SAME 7-decimal conversion the DEX purchase here already uses, rather
+ *  than growing a second, subtly-different copy of the same arithmetic. */
+export function atomicToDecimalString(atomic: bigint): string {
   const whole = atomic / ATOMIC_SCALE;
   const frac = atomic % ATOMIC_SCALE;
   if (frac === 0n) return whole.toString();
@@ -166,9 +189,6 @@ function atomicToDecimalString(atomic: bigint): string {
   return `${whole.toString()}.${fracStr}`;
 }
 
-function atomicToWholeUnitsCeil(atomic: bigint): bigint {
-  return (atomic + ATOMIC_SCALE - 1n) / ATOMIC_SCALE;
-}
 
 /**
  * Build, sign, and submit a classic (non-Soroban) transaction via Horizon,
@@ -247,6 +267,7 @@ export async function buyUsdc(
   // runtime shape (`.records`) is correct regardless of the builder's
   // declared TypeScript type.
   let path: Asset[];
+  let quotedSourceAmount: number;
   try {
     const paths = (await withTimeout(
       horizon.strictReceivePaths([Asset.native()], asset, destAmount).call(),
@@ -259,12 +280,18 @@ export async function buyUsdc(
     path = paths.records[0].path.map((p) =>
       p.asset_type === "native" ? Asset.native() : new Asset(p.asset_code!, p.asset_issuer!),
     );
+    // The REAL quoted cost of this trade, used for sendMax below instead of
+    // a flat per-unit constant.
+    quotedSourceAmount = Number(paths.records[0].source_amount);
   } catch {
     return { ok: false, reason: "couldn't look up a USDC purchase route" };
   }
 
-  const wholeUnitsCap = atomicToWholeUnitsCeil(targetAtomic);
-  const sendMax = String(Number(wholeUnitsCap) * XLM_PER_USDC_UNIT_CAP);
+  // sendMax is derived from the LIVE QUOTE, not a flat per-unit ceiling —
+  // see SLIPPAGE_MULTIPLIER's own comment for the real bug the old
+  // `wholeUnitsCeil * 250` form caused (a sendMax larger than the wallet's
+  // entire balance, which Stellar rejects outright before trading).
+  const sendMax = (quotedSourceAmount * SLIPPAGE_MULTIPLIER).toFixed(7);
 
   const purchaseResult = await submitClassic(
     horizon,

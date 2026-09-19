@@ -158,9 +158,18 @@ function testFundingUsesCreateAccountNotPayment(fundingSourcePath: string, sourc
     /Operation\.createAccount\(/.test(source),
     `${fundingSourcePath} builds the funding tx with Operation.createAccount`,
   );
+  // Scoped to the CREATE path only. Operation.payment is now legitimately
+  // used elsewhere in this file, by sendUsdcToThrowaway — which is correct:
+  // by the time it runs the account exists and has a trustline, which is
+  // exactly the precondition createAccount had to establish first. What must
+  // never regress is the account-CREATION operation, asserted above.
+  const createBlock = source.slice(
+    source.indexOf("export async function fundThrowawayFromMainnetWallet"),
+    source.indexOf("export async function sendUsdcToThrowaway"),
+  );
   assert(
-    !/Operation\.payment\(/.test(source),
-    `${fundingSourcePath} never uses Operation.payment (it cannot create a new account)`,
+    createBlock.length > 0 && !/Operation\.payment\(/.test(createBlock),
+    `${fundingSourcePath}'s account-creation path never uses Operation.payment (it cannot create a new account)`,
   );
   assert(
     /startingBalance:/.test(source),

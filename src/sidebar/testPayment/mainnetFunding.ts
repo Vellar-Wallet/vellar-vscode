@@ -7,15 +7,28 @@
  * developer's behalf without an on-chain request FROM the developer
  * (payToAddress's flow is the reverse: money arrives, nothing is spent).
  *
- * 3 XLM per test payment, fixed — not computed from the endpoint's price —
- * deliberately: a live XLM/USDC price lookup would add a real dependency
- * (another DEX round trip) to an already high-risk flow for marginal
- * precision gain. 3 XLM comfortably covers the throwaway wallet's own
- * account reserve (~1 XLM), its USDC trustline reserve (~0.5 XLM), the DEX
- * purchase's own fee/slippage, and the final x402 payment's transaction fee,
- * with headroom — unused XLM in the throwaway wallet is stranded when the
- * keypair is discarded at the end of runTestPayment.ts, same as unused
- * testnet XLM already is today; a real but small, predictable cost per test.
+ * TWO assets, two functions, in a fixed order forced by Stellar itself:
+ *   fundThrowawayFromMainnetWallet() creates the account with a little XLM,
+ *   the throwaway wallet then opens its own USDC trustline (only it can sign
+ *   that), and sendUsdcToThrowaway() finally credits it with real USDC.
+ *
+ * The XLM is NOT spending money — it only satisfies protocol minimums the
+ * network will not accept USDC for (account reserve, trustline reserve,
+ * transaction fees). The USDC is the money actually being tested with, and
+ * it comes straight from the developer's own funding wallet.
+ *
+ * WHY NOT BUY THE USDC ON THE DEX, as the testnet path does: on testnet the
+ * throwaway wallet gets free friendbot XLM and trades it for test USDC, so a
+ * bad fill costs nothing. On mainnet that same trade repeatedly failed for
+ * reasons unrelated to the payment under test — a testnet-era sendMax
+ * ceiling larger than the wallet's entire balance, order-book depth, and
+ * slippage between quoting and submitting — and every failure burned real
+ * XLM getting there. Sending USDC the developer already holds deletes that
+ * whole class of failure: there is no trade, so there is nothing to slip.
+ *
+ * Unused XLM and USDC in the throwaway wallet are stranded when the keypair
+ * is discarded at the end of runTestPayment.ts, same as unused testnet XLM
+ * already is today; a real but small, predictable cost per test.
  *
  * SECURITY, same discipline as usdc.ts's own submitClassic: the funding
  * wallet's Keypair here is constructed from a secret that is NEVER logged,
@@ -24,30 +37,72 @@
  * "never throws, always resolves to a discriminated result" contract.
  */
 
-import { Horizon, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Asset, Horizon, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import type { StellarNetwork } from "../../types";
 import {
   HORIZON_URL_BY_NETWORK,
   PASSPHRASE_BY_NETWORK,
   HORIZON_FETCH_TIMEOUT_MS,
   HORIZON_SUBMIT_TIMEOUT_MS,
+  USDC_ISSUER_BY_NETWORK,
+  atomicToDecimalString,
   withTimeout,
 } from "./usdc";
 
-/** Fixed XLM amount sent to the throwaway wallet per mainnet test payment —
- *  see this file's own header comment for why fixed, not computed. */
-export const MAINNET_FUNDING_XLM_AMOUNT = "3";
+/**
+ * XLM sent to the throwaway wallet per mainnet test payment. This no longer
+ * buys anything — it only covers Stellar's own protocol requirements, which
+ * cannot be paid in USDC:
+ *   - 1.0 XLM base reserve, to make the account exist at all
+ *   - 0.5 XLM subentry reserve for its USDC trustline
+ *   - transaction fees for the trustline and the x402 payment
+ *
+ * 1.6 is the practical floor: 1.5 of it is RESERVE that Stellar locks and
+ * never lets the account spend, leaving ~0.1 for fees (which actually cost
+ * ~0.00001 each — the 1000000-stroop fee set on these transactions is a
+ * maximum we're willing to pay, not the charge). Lowering this further hits
+ * op_low_reserve; the 1.5 is protocol, not policy, and cannot be tuned away.
+ * Raise it only if a wallet ever needs a second subentry.
+ *
+ * This was 6 back when the throwaway wallet had to BUY its USDC on the DEX
+ * with this XLM. It no longer does: the funding wallet sends real USDC
+ * directly (see MAINNET_FUNDING_USDC_BUFFER below), which removes the DEX
+ * purchase from the mainnet path entirely — along with its slippage, its
+ * order-book dependency, and the class of failure where a correctly funded
+ * wallet still could not complete a trade.
+ */
+export const MAINNET_FUNDING_XLM_AMOUNT = "1.6";
+
+/**
+ * How much USDC to send, as a multiple of the endpoint's own price: 20%
+ * over, so a payment isn't rejected for being a fraction short if the
+ * endpoint's quoted amount and the settled amount differ slightly.
+ *
+ * Integer math on 7-decimal atomic amounts (multiply then divide, so the
+ * truncation costs at most 1 atomic unit = 0.0000001 USDC).
+ */
+export const USDC_BUFFER_NUMERATOR = 12n;
+export const USDC_BUFFER_DENOMINATOR = 10n;
 
 const SUBMIT_TIMEOUT_SECONDS = 35;
 
 export type FundThrowawayResult = { ok: true } | { ok: false; reason: string };
 
 /**
- * Sends MAINNET_FUNDING_XLM_AMOUNT XLM from the funding wallet
- * (`fundingWalletSecret`) to `throwawayPublicKey`. Never throws — same
- * discriminated-result contract as usdc.ts's openUsdcTrustline/buyUsdc, so
- * the caller (runTestPayment.ts) can degrade/report a clean failure without
- * an unhandled rejection anywhere in the test-payment flow.
+ * Creates `throwawayPublicKey` with MAINNET_FUNDING_XLM_AMOUNT XLM. Never
+ * throws — same discriminated-result contract as usdc.ts's
+ * openUsdcTrustline/buyUsdc, so the caller (runTestPayment.ts) can
+ * degrade/report a clean failure without an unhandled rejection anywhere in
+ * the test-payment flow.
+ *
+ * This is deliberately SEPARATE from sendUsdcToThrowaway below, and must run
+ * first, because Stellar's own ordering forces three steps that cannot be
+ * collapsed into one transaction:
+ *   1. this function creates the account (only the FUNDING wallet can sign)
+ *   2. the throwaway wallet opens its own USDC trustline (only IT can sign —
+ *      see runTestPayment.ts's call to openUsdcTrustline between the two)
+ *   3. sendUsdcToThrowaway credits it (funding wallet signs again; would
+ *      fail with op_no_trust if attempted before step 2)
  *
  * `network` is always "stellar:pubnet" in practice (runTestPayment.ts only
  * ever calls this on the mainnet path) but is threaded through explicitly
@@ -148,6 +203,100 @@ export async function fundThrowawayFromMainnetWallet(
       const detail = [tx, ops].filter(Boolean).join(" / ");
       if (detail) return { ok: false, reason: `funding transaction failed (${detail})` };
     }
-    return { ok: false, reason: "funding transaction failed" };
+
+    // No Horizon result_codes means this was NOT a protocol rejection — a
+    // timeout, a DNS/TLS failure, or an SDK-level error. Falling through to
+    // a bare "funding transaction failed" here threw away the only
+    // information that could distinguish those, which cost two rounds of
+    // live reproduction to work around. err.message is a short SDK/network
+    // string (e.g. "mainnet funding: submitTransaction timed out after
+    // 60000ms"), carries nothing about the funding wallet's secret, and is
+    // exactly what a developer needs to see.
+    return { ok: false, reason: `funding transaction failed: ${message}` };
+  }
+}
+
+/**
+ * Sends USDC from the funding wallet to a throwaway wallet that has ALREADY
+ * been created and has ALREADY opened its USDC trustline. Never throws, same
+ * discriminated-result contract as everything else in this flow.
+ *
+ * This replaces the mainnet DEX purchase entirely. Previously the throwaway
+ * wallet was given XLM and had to buy its own USDC via
+ * pathPaymentStrictReceive, which failed repeatedly for reasons that had
+ * nothing to do with the payment being tested: a testnet-era sendMax ceiling
+ * that exceeded the wallet's whole balance, order-book depth, and slippage
+ * between quote and submit. Sending USDC that the developer already holds
+ * removes all of it — there is no trade, so there is nothing to slip.
+ *
+ * `amountAtomic` is a 7-decimal atomic string (the same convention the rest
+ * of this flow uses); it is converted to the decimal string Horizon's
+ * classic payment operation expects.
+ */
+export async function sendUsdcToThrowaway(
+  fundingWalletSecret: string,
+  throwawayPublicKey: string,
+  amountAtomic: string,
+  network: StellarNetwork,
+): Promise<FundThrowawayResult> {
+  if (!/^\d+$/.test(amountAtomic) || BigInt(amountAtomic) <= 0n) {
+    return { ok: false, reason: "invalid USDC funding amount" };
+  }
+
+  let fundingKeypair: Keypair;
+  try {
+    fundingKeypair = Keypair.fromSecret(fundingWalletSecret);
+  } catch {
+    return { ok: false, reason: "the configured mainnet funding wallet's secret key is invalid" };
+  }
+
+  const horizon = new Horizon.Server(HORIZON_URL_BY_NETWORK[network]);
+  const asset = new Asset("USDC", USDC_ISSUER_BY_NETWORK[network]);
+
+  try {
+    const account = await withTimeout(
+      horizon.loadAccount(fundingKeypair.publicKey()),
+      HORIZON_FETCH_TIMEOUT_MS,
+      "mainnet USDC funding: loadAccount",
+    );
+    const tx = new TransactionBuilder(account, { fee: "1000000", networkPassphrase: PASSPHRASE_BY_NETWORK[network] })
+      .addOperation(
+        Operation.payment({
+          destination: throwawayPublicKey,
+          asset,
+          amount: atomicToDecimalString(BigInt(amountAtomic)),
+        }),
+      )
+      .setTimeout(SUBMIT_TIMEOUT_SECONDS)
+      .build();
+    tx.sign(fundingKeypair);
+
+    const sent = await withTimeout(
+      horizon.submitTransaction(tx),
+      HORIZON_SUBMIT_TIMEOUT_MS,
+      "mainnet USDC funding: submitTransaction",
+    );
+    if (!sent.successful) return { ok: false, reason: "USDC funding transaction did not settle" };
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const codes = (err as { response?: { data?: { extras?: { result_codes?: Record<string, unknown> } } } })?.response
+      ?.data?.extras?.result_codes;
+    if (codes) {
+      const ops = Array.isArray(codes.operations) ? codes.operations.join(", ") : "";
+      // op_underfunded here means the FUNDING wallet is out of USDC
+      // specifically (not XLM) — a distinct, actionable state worth naming,
+      // since the fix is "convert or send more USDC", not "send more XLM".
+      if (ops.includes("op_underfunded")) {
+        return { ok: false, reason: "the configured mainnet funding wallet doesn't have enough USDC" };
+      }
+      if (ops.includes("op_no_trust")) {
+        return { ok: false, reason: "the throwaway wallet has no USDC trustline yet" };
+      }
+      const tx = typeof codes.transaction === "string" ? codes.transaction : undefined;
+      const detail = [tx, ops].filter(Boolean).join(" / ");
+      if (detail) return { ok: false, reason: `USDC funding failed (${detail})` };
+    }
+    return { ok: false, reason: `USDC funding failed: ${message}` };
   }
 }

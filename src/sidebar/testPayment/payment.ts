@@ -42,7 +42,49 @@ const RPC_URL_BY_NETWORK: Record<StellarNetwork, string> = {
   "stellar:testnet": "https://soroban-testnet.stellar.org",
   "stellar:pubnet": "https://mainnet.sorobanrpc.com",
 };
-const GET_TIMEOUT_MS = 30_000;
+/**
+ * Timeout for the FIRST cascade probe, which is the request that may have to
+ * wake a sleeping host.
+ *
+ * 30s is not enough in practice: a free-tier Render service that has scaled
+ * to zero takes measurably longer to cold-start than that — repeatedly
+ * observed at ~36s on the endpoint that motivated this feature, which meant
+ * the first click after an idle period ALWAYS failed with a timeout, and
+ * only a second click (against the now-warm host) could succeed. Making a
+ * developer click twice and know why is not a workflow.
+ *
+ * Probes AFTER the first use WARM_PROBE_TIMEOUT_MS: by then the host has
+ * demonstrably responded, so a slow reply means something else is wrong. The
+ * PAID request uses PAID_REQUEST_TIMEOUT_MS, which is far larger again — see
+ * its own comment for the measured reason why.
+ */
+const COLD_START_TIMEOUT_MS = 75_000;
+
+/**
+ * Timeout for the PAID request specifically — much larger than the probe
+ * ceiling above, because it is waiting on a fundamentally slower operation.
+ *
+ * A probe just needs the seller to answer "402". The paid request makes the
+ * seller verify the payment with the facilitator AND settle it on-chain
+ * before it can respond, and settlement is bounded by Stellar ledger close
+ * times, not by how fast the seller's own code runs.
+ *
+ * MEASURED, not guessed: a real seller's own logs show paid requests taking
+ * ~96 seconds end to end (`responseTime: 95887ms`, `96720ms`) while its
+ * unpaid 402s came back in under 1s. At the previous 75s ceiling this client
+ * hung up mid-settlement, the seller logged `RequestAbortedError: Request
+ * aborted`, and the proxy reported 502 — so a payment that was progressing
+ * normally looked like a server error. Worse, the settlement can COMPLETE
+ * after we stop listening (confirmed on-chain: a payment settled at 03:39
+ * whose HTTP response this client never received), leaving money moved with
+ * no confirmation to show for it.
+ *
+ * 180s is chosen to sit well clear of that observed ~96s rather than just
+ * above it, since settlement time varies with network conditions. It is
+ * still a real ceiling: a request genuinely stuck forever fails rather than
+ * hanging the sidebar.
+ */
+const PAID_REQUEST_TIMEOUT_MS = 180_000;
 
 /**
  * The verbs the cascade will BLIND-PROBE against a URL whose method nobody
@@ -64,14 +106,11 @@ const GET_TIMEOUT_MS = 30_000;
 const BLIND_PROBE_METHODS: readonly HttpMethod[] = ["GET", "POST"];
 
 /**
- * Per-probe timeout for probes AFTER the first. The first probe keeps the
- * full GET_TIMEOUT_MS: a cold Render/serverless host can genuinely take tens
- * of seconds on its first hit (measured on the real endpoint that motivated
- * this change — no response inside 60s cold, then 404 in ~1.2s once warm), and
- * aborting that first probe early would regress exactly the case this feature
- * exists to fix. By the time probe 2 runs the host is demonstrably warm, so a
- * tighter bound there keeps the worst-case cascade short without costing
- * correctness.
+ * Per-probe timeout for probes AFTER the first. The first probe gets
+ * COLD_START_TIMEOUT_MS instead (see above) because it may have to wake a
+ * sleeping host; by the time probe 2 runs the host has demonstrably
+ * responded, so a tighter bound here keeps the worst-case cascade short
+ * without costing correctness.
  */
 const WARM_PROBE_TIMEOUT_MS = 8_000;
 
@@ -198,7 +237,7 @@ async function resolveChallenge(
   const attempted: string[] = [];
 
   for (const [index, method] of order.entries()) {
-    const timeoutMs = index === 0 ? GET_TIMEOUT_MS : WARM_PROBE_TIMEOUT_MS;
+    const timeoutMs = index === 0 ? COLD_START_TIMEOUT_MS : WARM_PROBE_TIMEOUT_MS;
     const probe = await probeForChallenge(resourceUrl, method, sampleBody, timeoutMs);
     if (!probe.ok) {
       attempted.push(probe.transportError ? `${method} (unreachable)` : `${method} → ${probe.status}`);
@@ -350,11 +389,23 @@ export async function runPaymentFlow(
   // feature exists to fix. The payment header merges in via extraHeaders and
   // is spread last inside buildRequestInit, so Content-Type can never
   // displace it.
+  // PAID_REQUEST_TIMEOUT_MS, not a probe-sized bound. This is the single most
+  // timeout-sensitive request in the whole flow and previously had the
+  // SHORTEST allowance of the three, which is backwards:
+  //   - the payment payload is already built and signed by this point
+  //   - its validity is bounded by LEDGERS, so a timeout here cannot be
+  //     retried with the same payload (see this function's own header)
+  //   - a sleeping host can take ~36s to wake, and minutes may have passed
+  //     since the discovery probe woke it, so it may well have scaled back
+  //     down while the Soroban simulation and signing were happening
+  // Giving up at 30s here threw away a signed payment for a host that was
+  // merely still waking. The generous ceiling costs nothing when the host
+  // is warm (it responds in ~1s) and saves the payment when it isn't.
   let paid: Response;
   try {
     paid = await fetch(
       resourceUrl,
-      buildRequestInit(method, sampleBody, GET_TIMEOUT_MS, http.encodePaymentSignatureHeader(payload)),
+      buildRequestInit(method, sampleBody, PAID_REQUEST_TIMEOUT_MS, http.encodePaymentSignatureHeader(payload)),
     );
   } catch (err) {
     throw new PaymentFlowError(
