@@ -891,6 +891,24 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       endpointsRoot.innerHTML = '<div class="empty-state">Set your payout address to see your endpoints.</div>';
       return;
     }
+    // Stash the catalog's own settlement total for renderSettlements (see
+    // catalogSettlementTotal's comment). Only re-render the settlements
+    // section when the number actually CHANGES: renderEndpoints runs on every
+    // 60s poll, and an unconditional re-render here would rebuild that
+    // section — discarding its pagination position — on every tick.
+    const catalogTotal = (data.listings || []).reduce(
+      (sum, listing) => sum + (typeof listing.settlements === "number" ? listing.settlements : 0),
+      0,
+    );
+    if (catalogTotal !== catalogSettlementTotal) {
+      catalogSettlementTotal = catalogTotal;
+      if (lastSettlementsRender) {
+        renderSettlements(lastSettlementsRender.state, lastSettlementsRender.pagination);
+      }
+      if (lastEarningsRender) {
+        renderEarnings(lastEarningsRender);
+      }
+    }
     // The manual-URL "Activate endpoint" form is ALWAYS rendered below,
     // regardless of how many listings already exist — a developer selling
     // more than one endpoint needs to activate a second, third, etc. without
@@ -1046,6 +1064,45 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   // --- Recent Settlements --------------------------------------------------
   const settlementsRoot = document.getElementById("settlements-root");
 
+  // The facilitator's catalog and the explorer are two INDEPENDENT sources of
+  // settlement truth, and they can genuinely disagree: the catalog counts a
+  // settlement the moment it happens (it is the thing that settles), while the
+  // explorer only knows what its own on-chain indexer has classified. Real
+  // mainnet settlements — confirmed on-chain via Horizon — have been observed
+  // absent from the explorer entirely, not merely late: a settlement 15 hours
+  // old was still missing while the explorer was indexing OTHER payments
+  // minutes old. The likely reason is that these settle as Soroban SAC
+  // contract invocations rather than classic payment operations.
+  //
+  // Reporting a bare "No settlements yet" in that state tells the developer
+  // they have earned nothing, which is false and actively alarming when real
+  // money has moved. So renderEndpoints stashes the catalog's own total here
+  // and renderSettlements uses it to tell the two cases apart. The messages
+  // arrive as separate postMessages in no guaranteed order, hence
+  // module-scoped state rather than a parameter — whichever lands second
+  // re-renders with the fuller picture.
+  let catalogSettlementTotal = 0;
+
+  // The last arguments renderSettlements was called with, so that a LATER
+  // endpoints message (carrying the catalog total) can re-render the
+  // settlements section with that fuller picture. Without this, whichever
+  // message happened to arrive first would win and the note would be missing
+  // for the whole poll interval.
+  let lastSettlementsRender;
+  let lastEarningsRender;
+
+  // Built from currentNetwork rather than hardcoded to pubnet, for the same
+  // reason stellarExpertTxBase() below is a function: the toggle can switch
+  // networks between renders, and a mainnet catalog link shown while the
+  // sidebar is on testnet would send the developer to the wrong list.
+  function catalogUrl() {
+    return (
+      "https://vellar-facilitator.onrender.com/discovery/resources?network=" +
+      encodeURIComponent(currentNetwork) +
+      "&limit=100"
+    );
+  }
+
   // A function, not a constant, because it must reflect whichever network is
   // CURRENT at render time — currentNetwork (see the network badge above)
   // can change between one renderSettlements call and the next, and a
@@ -1076,6 +1133,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   // were ever missing — same defensiveness as every other field read off
   // event.data below).
   function renderSettlements(state, pagination) {
+    lastSettlementsRender = { state, pagination };
     if (state.status === "loading") {
       settlementsRoot.innerHTML = '<div class="empty-state">Loading…</div>';
       return;
@@ -1090,7 +1148,21 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (data.entries.length === 0 && (!pagination || pagination.page === 1)) {
-      settlementsRoot.innerHTML = '<div class="empty-state">No settlements yet.</div>';
+      // Two genuinely different situations, told apart by the catalog's own
+      // count (see catalogSettlementTotal above). Deliberately NOT worded as
+      // "indexing delay": a settlement 15 hours old was observed still absent
+      // while newer payments were indexed, so promising it will appear later
+      // would be a claim the evidence does not support.
+      settlementsRoot.innerHTML =
+        catalogSettlementTotal > 0
+          ? \`<div class="empty-state">
+               Your \${catalogSettlementTotal} settlement\${catalogSettlementTotal === 1 ? " is" : "s are"}
+               confirmed on-chain but \${catalogSettlementTotal === 1 ? "does" : "do"} not appear in the
+               explorer's index, so \${catalogSettlementTotal === 1 ? "it cannot" : "they cannot"} be listed here.
+               Your endpoint cards above show the live counts.
+               <a href="\${catalogUrl()}" target="_blank" rel="noreferrer">View the facilitator catalog</a>
+             </div>\`
+          : '<div class="empty-state">No settlements yet.</div>';
       return;
     }
 
@@ -1140,6 +1212,7 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
   const earningsRoot = document.getElementById("earnings-root");
 
   function renderEarnings(state) {
+    lastEarningsRender = state;
     if (state.status === "loading") {
       earningsRoot.innerHTML = '<div class="empty-state">Loading…</div>';
       return;
@@ -1155,7 +1228,14 @@ export class VellarSidebarProvider implements vscode.WebviewViewProvider {
     }
     const s = data.summary;
     if (s.basedOnCount === 0) {
-      earningsRoot.innerHTML = '<div class="empty-state">No settlements yet.</div>';
+      // Same distinction Recent Settlements makes above, and it matters more
+      // here: earnings computed from the explorer's rows would report 0.00
+      // while real USDC has actually been received, which is worse than
+      // saying nothing at all.
+      earningsRoot.innerHTML =
+        catalogSettlementTotal > 0
+          ? '<div class="empty-state">Earnings cannot be totalled — your settlements are not in the explorer\\'s index. See Recent Settlements above.</div>'
+          : '<div class="empty-state">No settlements yet.</div>';
       return;
     }
 
